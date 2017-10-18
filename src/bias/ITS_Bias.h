@@ -121,6 +121,8 @@ private:
 	double bias_min;
 	double bias_max;
 	double d_pot;
+	double step_size;
+	double norm_rescale;
 
 	bool equiv_temp;
 	bool is_const;
@@ -138,6 +140,7 @@ private:
 	bool is_unlinear;
 	bool is_set_temps;
 	bool is_set_ratios;
+	bool is_norm_rescale;
 	unsigned update_step;
 	unsigned output_step;
 	unsigned output_start;
@@ -187,7 +190,6 @@ private:
 	double ener_min;
 	double ener_max;
 	double dU;
-	double var_step_size;
 	double dvp2_complete;
 	
 	std::vector<Bias*> bias_pntrs_;

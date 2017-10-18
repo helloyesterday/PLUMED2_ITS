@@ -140,10 +140,9 @@ void ITS_Bias::registerKeywords(Keywords& keys)
 
 	keys.add("optional","START_CYCLE","the start step for fb updating");
 	keys.add("optional","FB_INIT","( default=-0.01 ) the default value for fb initializing");
-	keys.add("optional","FB_BIAS","( default=0.0 ) the bias value for fb updating");
 	keys.add("optional","RB_FAC1","( default=0.5 ) the ratio of the average value of rb");
 	keys.add("optional","RB_FAC2","( default=0.0 ) the ratio of the old steps in rb updating");
-	keys.add("optional","RB_SLOW","the constant that make the iteration of fb slow down");
+	keys.add("optional","STEP_SIZE","( default=1.0 )the step size of fb iteration");
 
 	keys.add("optional","FB_OUT_STRIDE","( default=1 ) the frequency to output the new fb values");
 	keys.add("optional","FBTRAJ_STRIDE","( default=1 ) the frequency to record the evoluation of fb values");
@@ -176,7 +175,6 @@ void ITS_Bias::registerKeywords(Keywords& keys)
 	keys.add("optional","ENERGY_ACCURACY","the interval of potential energy to calculate the 2nd order derivative");
 
 	keys.add("optional","ITERATE_LIMIT","to limit the iteration of fb value in variational in order to prevent the weight of higher temperatues become larger than the lower one");
-	keys.add("optional","VAR_STEP_SIZE","the step size of iteration used in the variational approach");
 }
 
 ITS_Bias::~ITS_Bias()
@@ -201,15 +199,16 @@ ITS_Bias::~ITS_Bias()
 ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	PLUMED_BIAS_INIT(ao),update_start(0),rct(0),
 	step(0),norm_step(0),mcycle(0),iter_limit(0),
-	fb_init(-0.01),fb_bias(0.0),rb_fac1(0.5),rb_fac2(0.0),rb_slow(1.0),
+	fb_init(-0.01),fb_bias(0.0),
+	rb_fac1(0.5),rb_fac2(0.0),step_size(1.0),norm_rescale(-1e38),
 	is_const(false),is_output(false),is_ves(false),
 	read_norm(false),only_1st(false),bias_output(false),
 	is_debug(false),potdis_output(false),
 	bias_linked(false),only_bias(false),
-	is_set_temps(false),is_set_ratios(false),
+	is_set_temps(false),is_set_ratios(false),is_norm_rescale(false),
 	output_start(0),start_cycle(0),fb_stride(1),fbtrj_stride(1),
 	bias_stride(1),potdis_step(1),rctid(0),
-	min_ener(1e38),pot_bin(1),dU(1),var_step_size(0.1),dvp2_complete(0)
+	min_ener(1e38),pot_bin(1),dU(1),dvp2_complete(0)
 {
 	if(getNumberOfArguments()==0)
 		only_bias=true;
@@ -571,10 +570,16 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 			//~ stl+") and TEMP_MAX("+sth+")");
 	//~ }
 	parse("FB_INIT",fb_init);
-	parse("FB_BIAS",fb_bias);
 	parse("RB_FAC1",rb_fac1);
 	parse("RB_FAC2",rb_fac2);
-	parse("RB_SLOW",rb_slow);
+	parse("STEP_SIZE",step_size);
+	
+	if(fabs(step_size-1)>1.0e-6)
+	{
+		is_norm_rescale=true;
+		fb_bias=std::log(step_size);
+		norm_rescale=std::log(step_size-1);
+	}
 
 	double min_dtemp=1e38;
 	for(unsigned i=0;i!=nreplica;++i)
@@ -608,9 +613,6 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	if(update_step==0)
 		error("PACE cannot be 0");
 
-	if(rb_slow<=0)
-		error("RB_SLOW must be larger than 0!");
-	rb_slow2=std::log(rb_slow);
 	parse("START_CYCLE",start_cycle);
 
 	fb_trj="fbtrj.data";
@@ -684,7 +686,6 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	}
 
 	parse("ITERATE_LIMIT",iter_limit);
-	parse("VAR_STEP_SIZE",var_step_size);
 
 	if(is_ves)
 	{
@@ -772,7 +773,7 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		
 		odebug.addConstantField("ITERATE_STEP");
 		odebug.addConstantField("NORM_STEP");
-		odebug.addConstantField("VAR_STEP_SIZE");
+		odebug.addConstantField("STEP_SIZE");
 		odebug.addConstantField("PESHIFT");
 	}
 
@@ -818,7 +819,6 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		log.printf("    FB_BIAS: %f\n",fb_bias);
 		log.printf("    RB_FAC1: %f\n",rb_fac1);
 		log.printf("    RB_FAC2: %f\n",rb_fac2);
-		log.printf("    RB_SLOW: %f\n",rb_slow);
 		if(read_fb)
 			log.printf("  Reading in FB values from file: %s\n",fb_input.c_str());
 		else if(is_unlinear)
@@ -944,12 +944,17 @@ void ITS_Bias::calculate()
 	{
 		for(unsigned i=0;i!=nreplica;++i)
 		{
+			// -\beta_k*U
 			gU[i]=-betak[i]*shift_energy;
+			// log[n_k*exp(-\beta_k*U)]
 			gf[i]=gU[i]+fb[i];
+			// log[\beta_k*n_k*exp(-\beta_k*U)]
 			bgf[i]=gf[i]+std::log(betak[i]);
 		}
 		
+		// log{\sum_k[n_k*exp(-\beta_k*U)]}
 		gfsum=gf[0];
+		// log{\sum_k[\beta_k*n_k*exp(-\beta_k*U)]}
 		bgfsum=bgf[0];
 		for(unsigned i=1;i!=nreplica;++i)
 		{
@@ -957,6 +962,7 @@ void ITS_Bias::calculate()
 			exp_added(bgfsum,bgf[i]);
 		}
 
+		// U_EFF=-1/\beta_0*log{\sum_k[n_k*exp(-\beta_k*U)]}
 		eff_energy=-gfsum/beta0;
 		bias_energy=eff_energy-shift_energy;
 		eff_factor=exp(bgfsum-gfsum)/beta0;
@@ -1092,6 +1098,12 @@ void ITS_Bias::calculate()
 			if(!use_fixed_peshift&&-1.0*min_ener>peshift)
 				change_peshift(-1.0*min_ener);
 
+			double rbfbsum=rbfb[0];
+			for(unsigned i=1;i!=nreplica;++i)
+				exp_added(rbfbsum,rbfb[i]);
+			for(unsigned i=0;i!=nreplica;++i)
+				rbfb[i]-=rbfbsum;
+
 			if(is_ves)
 				fb_variational();
 			else
@@ -1105,7 +1117,7 @@ void ITS_Bias::calculate()
 
 			output_fb();
 			for(unsigned i=0;i!=nreplica;++i)
-				rbfb[i]=0;
+				rbfb[i]=-1e38;
 
 			norm_step=0;
 		}
@@ -1123,12 +1135,18 @@ void ITS_Bias::update_rbfb()
 	if(norm_step==0)
 	{
 		for(unsigned i=0;i!=nreplica;++i)
-			rbfb[i]=gf[i]-gfsum;
+		{
+			//~ rbfb[i]=gf[i]-gfsum;
+			rbfb[i]=gf[i];
+		}
 	}
 	else
 	{
 		for(unsigned i=0;i!=nreplica;++i)
-			exp_added(rbfb[i],gf[i]-gfsum);
+		{
+			//~ exp_added(rbfb[i],gf[i]-gfsum);
+			exp_added(rbfb[i],gf[i]);
+		}
 	}
 }
 
@@ -1161,29 +1179,29 @@ void ITS_Bias::mw_merge_rbfb()
 		for(unsigned j=0;j!=rbfb.size();++j)
 			exp_added(rbfb[j],all_rbfb[i*rbfb.size()+j]);
 	}
-	if(!is_ves)
-	{
-		double nave=std::log(double(nw));
-		for(unsigned j=0;j!=rbfb.size();++j)
-			rbfb[j]-=nave;
-	}
+	//~ if(!is_ves)
+	//~ {
+		//~ double nave=std::log(double(nw));
+		//~ for(unsigned j=0;j!=rbfb.size();++j)
+			//~ rbfb[j]-=nave;
+	//~ }
 }
 
 // Y. Q. Gao, J. Chem. Phys. 128, 134111 (2008)
 void ITS_Bias::fb_iteration()
 {
-	if(rb_slow2!=0)
-	{
-		for(unsigned i=0;i!=nreplica;++i)
-			rbfb[i]-=rb_slow2;
-	}
+	//~ if(rb_slow2!=0)
+	//~ {
+		//~ for(unsigned i=0;i!=nreplica;++i)
+			//~ rbfb[i]-=rb_slow2;
+	//~ }
 
 	std::vector<double> rb;
 	std::vector<double> ratio1;
 
 	for(unsigned i=0;i!=nreplica-1;++i)
 	{
-		// rb[k]=log[f(p_k,p_{k+1})]
+		// rb[k]=log[f(p_k,p_{k+1})] (default=log{\sqrt[p_k*p_{k+1}]})
 		rb.push_back((rbfb[i]+rbfb[i+1])*rb_fac1+mcycle*rb_fac2);
 		// ratio_old[k]=log[m_k(t-1)], m_k=n_k/n_{k+1}
 		// (Notice that in the paper m_k=n_{k+1}/n_k)
@@ -1210,9 +1228,15 @@ void ITS_Bias::fb_iteration()
 	
 	// ratio[k]=log[m_k(t)]
 	std::vector<double> ratio;
-	// m_k(t)=[c_bias*f(p_k,p_{k+1})*p_k/p_{k+1}+m_k(t-1)*W_k(t-1)]/W_k(t)
+	// m_k(t)=[c_bias*f(p_k,p_{k+1})*p_k/p_{k+1}+m_k(t-1)*W_k(t-1)]/(W_k(t)+c_bias-1)
 	for(unsigned i=0;i!=nreplica-1;++i)
-		ratio.push_back(ratio1[i]-norml[i]+exp_add(normlold[i],rbfb[i+1]-rbfb[i]+rb[i]+fb_bias));
+	{
+		//~ ratio.push_back(ratio1[i]-norml[i]+exp_add(normlold[i],rbfb[i+1]-rbfb[i]+rb[i]+fb_bias));
+		double ratio_norm=norml[i];
+		if(is_norm_rescale)
+			ratio_norm=exp_add(norml[i],norm_rescale);
+		ratio.push_back(exp_add(fb_bias+rb[i]+rbfb[i+1]-rbfb[i],normlold[i]+ratio1[i])-ratio_norm);
+	}
 
 	// partio[k]=log[1/n_k]
 	std::vector<double> pratio(nreplica,0);
@@ -1304,14 +1328,14 @@ void ITS_Bias::fb_variational()
 	{
 		double fin_diff;
 		if(only_1st)
-			fin_diff=var_step_size*gradient[i];
+			fin_diff=step_size*gradient[i];
 		else
 		{
 			double o2a=0;
 			for(unsigned j=0;j!=nreplica;++j)
 				o2a+=hessian[i][j]*fb_diff[j];
 			o2as.push_back(o2a);
-			fin_diff=var_step_size*(gradient[i]+o2a);
+			fin_diff=step_size*(gradient[i]+o2a);
 		}
 
 		if(i==0)
@@ -1371,13 +1395,13 @@ void ITS_Bias::fb_variational()
 			odebug.open("error.data");
 			odebug.addConstantField("ITERATE_STEP");
 			odebug.addConstantField("NORM_STEP");
-			odebug.addConstantField("VAR_STEP_SIZE");
+			odebug.addConstantField("STEP_SIZE");
 			odebug.addConstantField("PESHIFT");
 		}
 		odebug.printf("--- FB Variational ---\n");
 		odebug.printField("ITERATE_STEP",int(mcycle));
 		odebug.printField("NORM_STEP",int(norm_step));
-		odebug.printField("VAR_STEP_SIZE",var_step_size);
+		odebug.printField("STEP_SIZE",step_size);
 		odebug.printField("PESHIFT",peshift);
 		for(unsigned i=0;i!=nreplica;++i)
 		{
