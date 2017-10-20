@@ -200,7 +200,7 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	PLUMED_BIAS_INIT(ao),update_start(0),rct(0),
 	step(0),norm_step(0),mcycle(0),iter_limit(0),
 	fb_init(-0.01),fb_bias(0.0),
-	rb_fac1(0.5),rb_fac2(0.0),step_size(1.0),norm_rescale(-1e38),
+	rb_fac1(0.5),rb_fac2(0.0),step_size(1.0),
 	is_const(false),is_output(false),is_ves(false),
 	read_norm(false),only_1st(false),bias_output(false),
 	is_debug(false),potdis_output(false),
@@ -310,6 +310,8 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		sim_temp=kBT/kB;
 	}
 	beta0=1.0/kBT;
+	
+	parse("START_CYCLE",start_cycle);
 	
 	if(fb_input.size()>0)
 	{
@@ -549,6 +551,7 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		}
 		
 		mcycle=start_cycle;
+		++start_cycle;
 	}
 
 	target_temp=sim_temp;
@@ -578,7 +581,6 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	{
 		is_norm_rescale=true;
 		fb_bias=std::log(step_size);
-		norm_rescale=std::log(step_size-1);
 	}
 
 	double min_dtemp=1e38;
@@ -612,8 +614,6 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	parse("PACE",update_step);
 	if(update_step==0)
 		error("PACE cannot be 0");
-
-	parse("START_CYCLE",start_cycle);
 
 	fb_trj="fbtrj.data";
 	parse("FB_TRAJ",fb_trj);
@@ -1014,7 +1014,10 @@ void ITS_Bias::calculate()
 	{
 		if(!is_const)
 		{
-			update_rbfb();
+			if(is_ves)
+				update_rbfb_rel();
+			else
+				update_rbfb_abs();
 			++norm_step;
 		}
 		
@@ -1098,12 +1101,6 @@ void ITS_Bias::calculate()
 			if(!use_fixed_peshift&&-1.0*min_ener>peshift)
 				change_peshift(-1.0*min_ener);
 
-			double rbfbsum=rbfb[0];
-			for(unsigned i=1;i!=nreplica;++i)
-				exp_added(rbfbsum,rbfb[i]);
-			for(unsigned i=0;i!=nreplica;++i)
-				rbfb[i]-=rbfbsum;
-
 			if(is_ves)
 				fb_variational();
 			else
@@ -1124,29 +1121,37 @@ void ITS_Bias::calculate()
 	}
 }
 
-void ITS_Bias::update_rbfb()
+// The traditional iterate process:
+inline void ITS_Bias::update_rbfb_abs()
 {
-	// In traditional iterate process:
 	// rbfb[k]=log[\sum_t(p_k)]; p_k=P_k/[\sum_k(P_k)]; P_k=int_
 	// the summation record the data of each the update steps (default=100)
-	// In variational iterate process:
+	if(norm_step==0)
+	{
+		for(unsigned i=0;i!=nreplica;++i)
+			rbfb[i]=gf[i];
+	}
+	else
+	{
+		for(unsigned i=0;i!=nreplica;++i)
+			exp_added(rbfb[i],gf[i]);
+	}
+}
+
+// In variational iterate process:
+inline void ITS_Bias::update_rbfb_rel()
+{
 	// rbfb[i]=log[(\sum_t(\beta*(\partial V_bias(U;a)/\partial a_i)))_V(a)]
 	//~ if(step%update_step==update_start)
 	if(norm_step==0)
 	{
 		for(unsigned i=0;i!=nreplica;++i)
-		{
-			//~ rbfb[i]=gf[i]-gfsum;
-			rbfb[i]=gf[i];
-		}
+			rbfb[i]=gf[i]-gfsum;
 	}
 	else
 	{
 		for(unsigned i=0;i!=nreplica;++i)
-		{
-			//~ exp_added(rbfb[i],gf[i]-gfsum);
-			exp_added(rbfb[i],gf[i]);
-		}
+			exp_added(rbfb[i],gf[i]-gfsum);
 	}
 }
 
@@ -1179,63 +1184,55 @@ void ITS_Bias::mw_merge_rbfb()
 		for(unsigned j=0;j!=rbfb.size();++j)
 			exp_added(rbfb[j],all_rbfb[i*rbfb.size()+j]);
 	}
-	//~ if(!is_ves)
-	//~ {
-		//~ double nave=std::log(double(nw));
-		//~ for(unsigned j=0;j!=rbfb.size();++j)
-			//~ rbfb[j]-=nave;
-	//~ }
 }
 
 // Y. Q. Gao, J. Chem. Phys. 128, 134111 (2008)
 void ITS_Bias::fb_iteration()
 {
-	//~ if(rb_slow2!=0)
-	//~ {
-		//~ for(unsigned i=0;i!=nreplica;++i)
-			//~ rbfb[i]-=rb_slow2;
-	//~ }
-
-	std::vector<double> rb;
-	std::vector<double> ratio1;
-
-	for(unsigned i=0;i!=nreplica-1;++i)
-	{
-		// rb[k]=log[f(p_k,p_{k+1})] (default=log{\sqrt[p_k*p_{k+1}]})
-		rb.push_back((rbfb[i]+rbfb[i+1])*rb_fac1+mcycle*rb_fac2);
-		// ratio_old[k]=log[m_k(t-1)], m_k=n_k/n_{k+1}
-		// (Notice that in the paper m_k=n_{k+1}/n_k)
-		ratio1.push_back(fb[i]-fb[i+1]);
-	}
-
-	// normal=log[W_k(t)], normalold=log[W_k(t-1)]
-	std::vector<double> normlold(norml);
-	if(mcycle==1&&!read_norm)
+	double rbfbsum=rbfb[0];
+	for(unsigned i=1;i!=nreplica;++i)
+		exp_added(rbfbsum,rbfb[i]);
+	for(unsigned i=0;i!=nreplica;++i)
+		rbfb[i]-=rbfbsum;
+	
+	// ratio[k]=log[m_k(t)]
+	std::vector<double> ratio;
+	if(mcycle==start_cycle&&!read_norm)
 	{
 		for(unsigned i=0;i!=nreplica-1;++i)
 		{
-			norml[i]=rb[i];
-			normlold[i]=-1e38;
+			norml[i]=(rbfb[i]+rbfb[i+1])*rb_fac1;
+			// m_k(0)=p_k(0)/p_{k+1}(0)
+			ratio.push_back(rbfb[i+1]-rbfb[i]);
 		}
 	}
 	else
 	{
-		// W_k(t)=\sum_t[f(p_k,p_{k+1})]
-		// the summation record the data of ALL the update steps
 		for(unsigned i=0;i!=nreplica-1;++i)
-			exp_added(norml[i],rb[i]);
-	}
-	
-	// ratio[k]=log[m_k(t)]
-	std::vector<double> ratio;
-	// m_k(t)=[c_bias*f(p_k,p_{k+1})*p_k/p_{k+1}+m_k(t-1)*W_k(t-1)]/(W_k(t)+c_bias-1)
-	for(unsigned i=0;i!=nreplica-1;++i)
-	{
-		//~ ratio.push_back(ratio1[i]-norml[i]+exp_add(normlold[i],rbfb[i+1]-rbfb[i]+rb[i]+fb_bias));
-		double ratio_norm=norml[i];
-		if(is_norm_rescale)
-			ratio_norm=exp_add(norml[i],norm_rescale);
-		ratio.push_back(exp_add(fb_bias+rb[i]+rbfb[i+1]-rbfb[i],normlold[i]+ratio1[i])-ratio_norm);
+		{
+			// rb=log[f(p_k,p_{k+1};t)]
+			// f(p_k,p_{k+1};t)=(p_k(t)*p_{k+1}(t))^c1+t*c2
+			// (default f(p_k,p_{k+1};t)=\sqrt[p_k(t)*p_{k+1}(t)])
+			double rb=(rbfb[i]+rbfb[i+1])*rb_fac1+(mcycle-1)*rb_fac2;
+			// ratio_old=log[m_k(t-1)], m_k=n_k/n_{k+1}
+			// (Notice that in the paper m_k=n_{k+1}/n_k)
+			double ratio_old=fb[i]-fb[i+1];
+			
+			// normal=log[W_k(t)], normalold=log[W_k(t-1)]
+			// W_k(t)=\sum_t[f(p_k,p_{k+1})]=W_k(t-1)+f(p_k,p_{k+1};t)
+			// the summation record the data of ALL the update steps
+			double normlold=norml[i];
+			exp_added(norml[i],rb);
+			
+			// Rescaled normalization factor
+			double rationorm=norml[i];
+			// Wr_k(t)=W_k(t-1)+c_bias*f(p_k,p_{k+1};t)
+			if(is_norm_rescale)
+				rationorm=exp_add(normlold,rb+fb_bias);
+				
+			// m_k(t)=[c_bias*f(p_k,p_{k+1};t)*p_k(t)/p_{k+1}(t)+m_k(t-1)*W_k(t-1)]/Wr_k(t)
+			ratio.push_back(exp_add(fb_bias+rb+rbfb[i+1]-rbfb[i],normlold+ratio_old)-rationorm);
+		}
 	}
 
 	// partio[k]=log[1/n_k]

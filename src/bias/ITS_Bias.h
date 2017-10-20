@@ -122,7 +122,6 @@ private:
 	double bias_max;
 	double d_pot;
 	double step_size;
-	double norm_rescale;
 
 	bool equiv_temp;
 	bool is_const;
@@ -200,9 +199,10 @@ private:
 	Value* valueRct;
 	Value* valueRBias;
 
-	void update_rbfb();
+	inline void update_rbfb_abs();
+	inline void update_rbfb_rel();
+	
 	void fb_iteration();
-
 	void fb_variational();
 	void output_fb();
 	void mw_merge_rbfb();
