@@ -900,8 +900,10 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 			log.printf("  Using debug mod with output file: %s\n",debug_file.c_str());
 
 		log<<"Bibliography "<<
-			plumed.cite("Y. Q. Gao, J. Chem. Phys. 128, 064105 (2008)")<<
-			plumed.cite("Y. Q. Gao, J. Chem. Phys. 128, 134111 (2008)");
+			plumed.cite("Gao, J. Chem. Phys. 128, 064105 (2008)")<<
+			plumed.cite("Gao, J. Chem. Phys. 128, 134111 (2008)");
+		if(bias_linked)
+			log<<plumed.cite("Yang, Zhang, Che, Yang, and Gao, J. Chem. Phys. 144, 094105 (2016)");
 		log<<"\n";
 	}
 	if(bias_output)
