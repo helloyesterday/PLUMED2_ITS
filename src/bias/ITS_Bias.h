@@ -131,6 +131,7 @@ private:
 	bool only_1st;
 	bool use_mw;
 	bool bias_output;
+	bool rbfb_output;
 	bool is_debug;
 	bool potdis_output;
 	bool bias_linked;
@@ -166,6 +167,7 @@ private:
 	std::string bias_file;
 	std::string debug_file;
 	std::string potdis_file;
+	std::string rbfb_file;
 
 	OFile ofb;
 	OFile ofbtrj;
@@ -174,6 +176,7 @@ private:
 	OFile opstrj;
 	OFile ofw;
 	OFile obias;
+	OFile orbfb;
 	OFile odebug;
 	OFile opotdis;
 

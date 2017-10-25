@@ -30,17 +30,40 @@ Used to perform integrated tempering sampling (ITS) molecular dynamics
 simulation on potential energy of the system or bias potential of CVs.
 
 The ITS method generates a broad distribution as a function of the
-potentialenergy \f$U\f$ of the system, which is achieved by using an
+potential energy \f$U\f$ of the system, which is achieved by using an
 effective potential energy \f$U^{\text{eff}}\f$ :
 
 \f[
-U^{\text{eff}} = -\frac{1}{\beta_0} \log \sum_{k}^{N} n_k e^{- \beta_k U},
+U^{\text{eff}} = -\frac{1}{\beta_0} \log \sum_{k}^{N} n_k e^{- \beta_k U}
 \f]
 
 in which \f$\beta_0\f$ is the temperature of the system of interest,
 \f$\beta_k\f$ is a series of temperatures that cover both low and high
 temperatures, and \f$\{n_k\}\f$ are reweighting factors obtained through
 an iterative procedure.
+
+In PLUMED, all the bias are CV (collective variables) based. Therefore,
+we change the form of ITS method to a CV-based bias potential \f$V(U)\f$:
+
+\f[
+V(U) = U^{\text{eff}} - U = -\frac{1}{\beta_0} \log \sum_{k}^{N} n_k e^{- \beta_k U} - U
+\f]
+
+In this form, the CV should be only chosen as energy, for example, the
+potential energy of the system. In fact, the bias energy from the PLUMED
+can be also used as the energy, in this cituation:
+
+\f[
+V(V') = -\frac{1}{\beta_0} \log \sum_{k}^{N} n_k e^{- \beta_0 * (a_k * V')} - V
+\f]
+
+Therefore, the ITS method can be also consider about a broad distribution
+as a summation of a series of rescaled bias potential. \f$a_k\f$ is the
+rescale factor. In fact, \f$a_k\f$ and \f$\beta_k\f$ are equivalent because
+\f$\beta_k = a_k * \beta_0\f$ then \f$a_k = T_0/T_k\f$. Therefore, you can choose the series of
+temperatures or rescale factors to generate the broad distribution.
+
+
  
 The system can be recovered to the thermodynamics at normal temperature
 \f$\beta_0\f$ by multiplying a reweighting factor \f$c_0\f$ on the
@@ -159,6 +182,7 @@ void ITS_Bias::registerKeywords(Keywords& keys)
 	keys.add("optional","OUTPUT_START","the start step of reweighting factor output");
 	keys.add("optional","FB_READ_FILE","a file of reading fb values (include temperatures and peshift)");
 	keys.add("optional","BIAS_FILE","a file to output the function of bias potential");
+	keys.add("optional","RBFB_FILE","a file to output the evoluation of rbfb");
 	keys.add("optional","BIAS_STRIDE","the frequency to output the bias potential");
 	keys.add("optional","BIAS_MIN","the minimal value of coordinate of the bias potential function");
 	keys.add("optional","BIAS_MAX","the maximal value of coordinate of the bias potential function");
@@ -194,6 +218,8 @@ ITS_Bias::~ITS_Bias()
 		odebug.close();
 	if(potdis_output)
 		opotdis.close();
+	if(rbfb_output)
+		orbfb.close();
 }
 
 ITS_Bias::ITS_Bias(const ActionOptions& ao):
@@ -203,7 +229,7 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	rb_fac1(0.5),rb_fac2(0.0),step_size(1.0),
 	is_const(false),is_output(false),is_ves(false),
 	read_norm(false),only_1st(false),bias_output(false),
-	is_debug(false),potdis_output(false),
+	rbfb_output(false),is_debug(false),potdis_output(false),
 	bias_linked(false),only_bias(false),
 	is_set_temps(false),is_set_ratios(false),is_norm_rescale(false),
 	output_start(0),start_cycle(0),fb_stride(1),fbtrj_stride(1),
@@ -669,6 +695,14 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		d_pot=(bias_max-bias_min)/(bias_bins-1);
 	}
 	
+	parse("RBFB_FILE",rbfb_file);
+	if(rbfb_file.size()>0)
+	{
+		rbfb_output=true;
+		orbfb.link(*this);
+		orbfb.open(rbfb_file);
+	}
+	
 	parse("POTDIS_FILE",potdis_file);
 	if(potdis_file.size()>0)
 	{
@@ -881,6 +915,8 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 				update_step);
 			log.printf("    writing FB output to file: %s\n",fb_file.c_str());
 			log.printf("    writing FB trajectory to file: %s\n",fb_trj.c_str());
+			if(rbfb_output)
+				log.printf("    writing RBFB trajectory to file: %s\n",rbfb_file.c_str());
 			log.printf("    writing normalized factors trajectory to file: %s\n",
 				norm_trj.c_str());
 			log.printf("    writing potential energy shift trajectory to file: %s\n",
@@ -1095,7 +1131,23 @@ void ITS_Bias::calculate()
 				bias_record.resize(0);
 				force_record.resize(0);
 			}
+			
 			++mcycle;
+			
+			if(rbfb_output&&mcycle%fbtrj_stride==0)
+			{
+				orbfb.fmtField(" %f");
+				orbfb.printField("step",int(mcycle));
+				for(unsigned i=0;i!=nreplica;++i)
+				{
+					std::string id;
+					Tools::convert(i,id);
+					std::string rbfbid="RBFB"+id;
+					orbfb.printField(rbfbid,rbfb[i]);
+				}
+				orbfb.printField();
+				orbfb.flush();
+			}
 
 			//~ comm.Sum(rbfb);
 			if(use_mw)
