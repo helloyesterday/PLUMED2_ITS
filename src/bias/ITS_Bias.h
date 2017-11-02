@@ -141,6 +141,7 @@ private:
 	bool is_set_temps;
 	bool is_set_ratios;
 	bool is_norm_rescale;
+	bool is_direct;
 	unsigned update_step;
 	unsigned output_step;
 	unsigned output_start;
@@ -202,8 +203,8 @@ private:
 	Value* valueRct;
 	Value* valueRBias;
 
-	inline void update_rbfb_abs();
-	inline void update_rbfb_rel();
+	inline void update_rbfb();
+	inline void update_rbfb_direct();
 	
 	void fb_iteration();
 	void fb_variational();

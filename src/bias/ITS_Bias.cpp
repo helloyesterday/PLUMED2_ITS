@@ -167,6 +167,7 @@ void ITS_Bias::registerKeywords(Keywords& keys)
 	keys.addFlag("TEMP_CONTRIBUTE",false,"use the contribution of each temperatue to calculate the derivatives instead of the target distribution");
 	keys.addFlag("USE_FIXED_PESHIFT",false,"use the fixed PESHIFT value and do not update it automatically during the iteration of FB value");
 	keys.addFlag("UNLINEAR_REPLICAS",false,"to setup the segments of temperature be propotional to the temperatues. If you setup the REPLICA_RATIO_MIN value, this term will be automatically opened.");
+	keys.addFlag("DIRECT_AVERAGE",false,"to directly calculate the average of rbfb value in each step (only be used in traditional iteration process)");
 
 	keys.add("optional","START_CYCLE","the start step for fb updating");
 	keys.add("optional","FB_INIT","( default=0.0 ) the default value for fb initializing");
@@ -281,6 +282,7 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	parseFlag("ONLY_FIRST_ORDER",only_1st);
 	parseFlag("USE_FIXED_PESHIFT",use_fixed_peshift);
 	parseFlag("UNLINEAR_REPLICAS",is_unlinear);
+	parseFlag("DIRECT_AVERAGE",is_direct);
 	parse("PESHIFT",peshift);
 	parse("FB_READ_FILE",fb_input);
 	
@@ -918,6 +920,10 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		if(!is_const)
 		{
 			log.printf("  Using ITS update\n");
+			if(is_direct)
+				log.printf("    with directly calculating the avaerage of rbfb at each step\n");
+			else
+				log.printf("    with calculating the avaerage of rbfb at the end of fb updating\n");
 			log.printf("    with frequence of FB value update: %d\n",
 				update_step);
 			log.printf("    writing FB output to file: %s\n",fb_file.c_str());
@@ -1059,10 +1065,10 @@ void ITS_Bias::calculate()
 	{
 		if(!is_const)
 		{
-			if(is_ves)
-				update_rbfb_rel();
+			if(is_ves||is_direct)
+				update_rbfb_direct();
 			else
-				update_rbfb_abs();
+				update_rbfb();
 			++norm_step;
 		}
 		
@@ -1182,10 +1188,10 @@ void ITS_Bias::calculate()
 	}
 }
 
-// The traditional iterate process:
-inline void ITS_Bias::update_rbfb_abs()
+// The iterate process of rbfb
+// rbfb[k]=log[\sum_t(P_k)]
+inline void ITS_Bias::update_rbfb()
 {
-	// rbfb[k]=log[\sum_t(p_k)]; p_k=P_k/[\sum_k(P_k)]; P_k=int_
 	// the summation record the data of each the update steps (default=100)
 	if(norm_step==0)
 	{
@@ -1199,10 +1205,12 @@ inline void ITS_Bias::update_rbfb_abs()
 	}
 }
 
-// In variational iterate process:
-inline void ITS_Bias::update_rbfb_rel()
+// The iterate process of rbfb
+// rbfb[k]=log[\sum_t(p_k)]; p_k=P_k/[\sum_k(P_k)];
+// The equivalence in variational iterate process:
+// rbfb[i]=log[(\sum_t(\beta*(\partial V_bias(U;a)/\partial a_i)))_V(a)]
+inline void ITS_Bias::update_rbfb_direct()
 {
-	// rbfb[i]=log[(\sum_t(\beta*(\partial V_bias(U;a)/\partial a_i)))_V(a)]
 	//~ if(step%update_step==update_start)
 	if(norm_step==0)
 	{
@@ -1245,16 +1253,29 @@ void ITS_Bias::mw_merge_rbfb()
 		for(unsigned j=0;j!=rbfb.size();++j)
 			exp_added(rbfb[j],all_rbfb[i*rbfb.size()+j]);
 	}
+	if(is_ves||is_direct)
+	{
+		for(unsigned i=1;i!=nreplica;++i)
+			rbfb[i]-=std::log(static_cast<double>(nw));
+	}
 }
 
 // Y. Q. Gao, J. Chem. Phys. 128, 134111 (2008)
 void ITS_Bias::fb_iteration()
 {
-	double rbfbsum=rbfb[0];
-	for(unsigned i=1;i!=nreplica;++i)
-		exp_added(rbfbsum,rbfb[i]);
-	for(unsigned i=0;i!=nreplica;++i)
-		rbfb[i]-=rbfbsum;
+	if(is_direct)
+	{
+		for(unsigned i=1;i!=nreplica;++i)
+			rbfb[i]-=std::log(static_cast<double>(update_step));
+	}
+	else
+	{
+		double rbfbsum=rbfb[0];
+		for(unsigned i=1;i!=nreplica;++i)
+			exp_added(rbfbsum,rbfb[i]);
+		for(unsigned i=0;i!=nreplica;++i)
+			rbfb[i]-=rbfbsum;
+	}
 	
 	// ratio[k]=log[m_k(t)]
 	std::vector<double> ratio;
