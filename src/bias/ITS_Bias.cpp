@@ -169,8 +169,7 @@ void ITS_Bias::registerKeywords(Keywords& keys)
 	keys.addFlag("UNLINEAR_REPLICAS",false,"to setup the segments of temperature be propotional to the temperatues. If you setup the REPLICA_RATIO_MIN value, this term will be automatically opened.");
 
 	keys.add("optional","START_CYCLE","the start step for fb updating");
-	keys.add("optional","FB_INIT1","( default=-0.01 ) the default value for fb initializing");
-	keys.add("optional","FB_INIT2","( default=0.0 ) the default value for fb initializing");
+	keys.add("optional","FB_INIT","( default=0.0 ) the default value for fb initializing");
 	keys.add("optional","RB_FAC1","( default=0.5 ) the ratio of the average value of rb");
 	keys.add("optional","RB_FAC2","( default=0.0 ) the ratio of the old steps in rb updating");
 	keys.add("optional","STEP_SIZE","( default=1.0 )the step size of fb iteration");
@@ -233,8 +232,7 @@ ITS_Bias::~ITS_Bias()
 ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	PLUMED_BIAS_INIT(ao),update_start(0),rct(0),
 	step(0),norm_step(0),mcycle(0),iter_limit(0),
-	fb_init1(-0.01),fb_init2(0),fb_bias(0.0),
-	rb_fac1(0.5),rb_fac2(0.0),step_size(1.0),
+	fb_init(0.0),fb_bias(0.0),rb_fac1(0.5),rb_fac2(0.0),step_size(1.0),
 	is_const(false),is_output(false),is_ves(false),
 	read_norm(false),only_1st(false),bias_output(false),
 	rbfb_output(false),is_debug(false),potdis_output(false),
@@ -606,8 +604,7 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		//~ error("the value of SIM_TEMP("+sts+") must between TEMP_MIN("+
 			//~ stl+") and TEMP_MAX("+sth+")");
 	//~ }
-	parse("FB_INIT1",fb_init1);
-	parse("FB_INIT2",fb_init2);
+	parse("FB_INIT",fb_init);
 	parse("RB_FAC1",rb_fac1);
 	parse("RB_FAC2",rb_fac2);
 	parse("STEP_SIZE",step_size);
@@ -619,7 +616,6 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	}
 
 	double min_dtemp=1e38;
-	//~ double dfb=temph/templ/(nreplica-1);
 	for(unsigned i=0;i!=nreplica;++i)
 	{
 		if(is_set_ratios)
@@ -628,7 +624,7 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 			betak.push_back(1.0/(kB*int_temps[i]));
 
 		if(!read_fb)
-			fb.push_back(-exp(fb_init1*nreplica+fb_init2*(betak[0]-betak[i])));
+			fb.push_back(-exp(fb_init*(betak[0]-betak[i])));
 		
 		double now_dtemp=fabs(int_temps[i]-sim_temp);
 		if(now_dtemp<min_dtemp)
@@ -860,8 +856,7 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 				log.printf("    Bias %d: %s with ratio %f\n",i+1,bias_labels[i].c_str(),bias_ratio[i]);
 		}
 		log.printf("  with basic parameters:\n");
-		log.printf("    FB_INIT1: %f\n",fb_init1);
-		log.printf("    FB_INIT2: %f\n",fb_init2);
+		log.printf("    FB_INIT: %f\n",fb_init);
 		log.printf("    FB_BIAS: %f\n",fb_bias);
 		log.printf("    RB_FAC1: %f\n",rb_fac1);
 		log.printf("    RB_FAC2: %f\n",rb_fac2);

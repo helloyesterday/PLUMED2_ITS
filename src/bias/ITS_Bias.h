@@ -112,8 +112,7 @@ private:
 	unsigned norm_step;
 	unsigned mcycle;
 	unsigned iter_limit;
-	double fb_init1;
-	double fb_init2;
+	double fb_init;
 	double fb_bias;
 	double rb_fac1;
 	double rb_fac2;
