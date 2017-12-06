@@ -20,7 +20,7 @@
    along with plumed.  If not, see <http://www.gnu.org/licenses/>.
 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ */
 #include "Bias.h"
-#include "ITS_Bias.h"
+
 
 namespace PLMD {
 namespace bias {
@@ -31,9 +31,9 @@ Bias::Bias(const ActionOptions&ao):
   ActionWithValue(ao),
   ActionWithArguments(ao),
   outputForces(getNumberOfArguments(),0.0),
-  its_linked_(false),
-  its_bias_pntr_(NULL),
-  bias_force_increase_(0)
+  ex_bias_linked_(false),
+  ex_bias_pntr_(NULL),
+  extra_bias_ratio_(0)
 {
   addComponentWithDerivatives("bias");
   componentIsNotPeriodic("bias");
@@ -64,10 +64,12 @@ void Bias::apply() {
   const unsigned noa=getNumberOfArguments();
   const unsigned ncp=getNumberOfComponents();
   
-  if(its_linked_)
+  // apply the ratio of extra bias
+  if(ex_bias_linked_)
   {
     for(unsigned i=0; i<noa; ++i)
-      outputForces[i]*=(1.0+bias_force_increase_);
+      outputForces[i]*=(1.0+extra_bias_ratio_);
+    extra_bias_ratio_=0;
   }
 
   if(onStep()) {
@@ -97,18 +99,18 @@ void Bias::apply() {
 
 }
 
-void Bias::linkITSBias(ITS_Bias* its_bias_pntr_in)
+void Bias::linkExternalBias(Bias* ex_bias_pntr_in)
 {
-  if(its_bias_pntr_==NULL){
-    its_bias_pntr_ = its_bias_pntr_in;
+  if(ex_bias_pntr_==NULL){
+    ex_bias_pntr_ = ex_bias_pntr_in;
   }
   else {
     std::string err_msg = "bias " + getLabel() + " of type " + getName() +
-      " has already been linked with ITS pointor " + its_bias_pntr_->getLabel() +
-      " of type " + its_bias_pntr_->getName() + ". You cannot link two ITS pointer to the same bias.";
+      " has already been linked with ITS pointor " + ex_bias_pntr_->getLabel() +
+      " of type " + ex_bias_pntr_->getName() + ". You cannot link two ITS pointer to the same bias.";
     plumed_merror(err_msg);
   }
-  its_linked_=true;
+  ex_bias_linked_=true;
 }
 
 }

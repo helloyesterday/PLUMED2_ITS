@@ -259,7 +259,7 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		{
 			bias_pntrs_[i]=plumed.getActionSet().selectWithLabel<Bias*>(bias_labels[i]);
 			if(!bias_pntrs_[i]){plumed_merror("bias "+bias_labels[i]+" does not exist. NOTE: the Bias-ITS should always be defined AFTER all the other biases.");}
-			bias_pntrs_[i]->linkITSBias(this);
+			bias_pntrs_[i]->linkExternalBias(this);
 		}
 		parseVector("BIAS_RATIO",bias_ratio);
 		if(bias_ratio.size()==1)
@@ -1026,7 +1026,7 @@ void ITS_Bias::calculate()
 	if(bias_linked)
 	{
 		for(unsigned i=0;i!=nbiases;++i)
-			bias_pntrs_[i]->setITSBias(-1.0*bias_force*bias_ratio[i]);
+			bias_pntrs_[i]->setExtraBiasRatio(-1.0*bias_force*bias_ratio[i]);
 	}
 	
 	if(!only_bias)

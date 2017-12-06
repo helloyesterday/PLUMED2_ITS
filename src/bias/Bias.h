@@ -37,8 +37,6 @@ This is the abstract base class to use for implementing new simulation biases, w
 information as to how to go about implementing a new bias.
 */
 
-class ITS_Bias;
-
 class Bias :
   public ActionPilot,
   public ActionWithValue,
@@ -47,10 +45,14 @@ class Bias :
 /// the vector of the forces
   std::vector<double> outputForces;
 /// the pointer to the bias component
-  bool its_linked_;
-  ITS_Bias* its_bias_pntr_;
-  double bias_force_increase_;
   Value *valueBias;
+/// linked to another bias
+/// the pointer be linked to another bias
+  bool ex_bias_linked_;
+  Bias* ex_bias_pntr_;
+/// the ratio of the extra bias
+  double extra_bias_ratio_;
+///
 protected:
 /// set the force from the bias on argument i, this automatically set the partial derivative of the bias with respect to i to -f
   void setOutputForce(int i,double f);
@@ -61,10 +63,12 @@ public:
   explicit Bias(const ActionOptions&ao);
   void apply();
   unsigned getNumberOfDerivatives();
-  void linkITSBias(ITS_Bias*);
-  bool isITSLinked() const {return its_linked_;}
+/// linked to another bias
+  void linkExternalBias(Bias*);
+  bool ExternalBiasLinked() const {return ex_bias_linked_;}
   double getBias() const {return valueBias->get();}
-  void setITSBias(double bias_force_increase_in) {bias_force_increase_=bias_force_increase_in;}
+  void setExtraBiasRatio(double extra_bias_ratio_in) {extra_bias_ratio_=extra_bias_ratio_in;}
+///
 };
 
 inline
