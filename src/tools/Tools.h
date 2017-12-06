@@ -1,5 +1,5 @@
 /* +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-   Copyright (c) 2011-2016 The plumed team
+   Copyright (c) 2011-2017 The plumed team
    (see the PEOPLE file at the root of the distribution for a list of names)
 
    See http://www.plumed.org for more information.
@@ -31,7 +31,7 @@
 #include <algorithm>
 #include <sstream>
 
-namespace PLMD{
+namespace PLMD {
 
 class IFile;
 
@@ -49,7 +49,7 @@ const double pi(3.14159265358979323846264338327950288419716939937510582097494459
 
 /// \ingroup TOOLBOX
 /// Empty class which just contains several (static) tools
-class Tools{
+class Tools {
 /// class to convert a string to a generic type T
   template<class T>
   static bool convertToAny(const std::string & str,T &t);
@@ -101,20 +101,20 @@ public:
 /// line.push_back("aa=xx");
 /// getKey(line,"aa",s);
 /// will set s="xx"
-  static bool getKey(std::vector<std::string>& line,const std::string & key,std::string & s);
+  static bool getKey(std::vector<std::string>& line,const std::string & key,std::string & s,int rep=-1);
 /// Find a keyword on the input line, eventually deleting it, and saving its value to val
   template <class T>
-  static bool parse(std::vector<std::string>&line,const std::string&key,T&val);
+  static bool parse(std::vector<std::string>&line,const std::string&key,T&val,int rep=-1);
 /// Find a keyword on the input line, eventually deleting it, and saving its value to a vector
   template <class T>
-  static bool parseVector(std::vector<std::string>&line,const std::string&key,std::vector<T>&val);
+  static bool parseVector(std::vector<std::string>&line,const std::string&key,std::vector<T>&val,int rep=-1);
 /// Find a keyword without arguments on the input line
   static bool parseFlag(std::vector<std::string>&line,const std::string&key,bool&val);
 /// Find a keyword on the input line, just reporting if it exists or not
   static bool findKeyword(const std::vector<std::string>&line,const std::string&key);
 /// Interpret atom ranges
   static void interpretRanges(std::vector<std::string>&);
-/// Remove duplicates from a vector of type T 
+/// Remove duplicates from a vector of type T
   template <typename T>
   static void removeDuplicates(std::vector<T>& vec);
 /// interpret ":" syntax for labels
@@ -127,34 +127,43 @@ public:
 /// E.g.: extension("pippo.xyz")="xyz".
 /// It only returns extensions with a length between 1 and 4
 /// E.g.: extension("pippo.12345")="" whereas extenion("pippo.1234")="1234";
-/// It is also smart enough to detect "/", so that 
+/// It is also smart enough to detect "/", so that
 /// extension("pippo/.t")="" whereas extension("pippo/a.t")="t"
   static std::string extension(const std::string&);
 /// Fast int power
   static double fastpow(double base,int exp);
+/// Modified 0th-order Bessel function of the first kind
+  static double bessel0(const double& val);
 /// Check if a string full starts with string start.
 /// Same as full.find(start)==0
   static bool startWith(const std::string & full,const std::string &start);
 };
 
 template <class T>
-bool Tools::parse(std::vector<std::string>&line,const std::string&key,T&val){
+bool Tools::parse(std::vector<std::string>&line,const std::string&key,T&val,int rep) {
   std::string s;
-  if(!getKey(line,key+"=",s)) return false;
+  if(!getKey(line,key+"=",s,rep)) return false;
   if(s.length()>0 && !convert(s,val))return false;
   return true;
 }
 
 template <class T>
-bool Tools::parseVector(std::vector<std::string>&line,const std::string&key,std::vector<T>&val){
+bool Tools::parseVector(std::vector<std::string>&line,const std::string&key,std::vector<T>&val,int rep) {
   std::string s;
-  if(!getKey(line,key+"=",s)) return false;
-//  if(s.length()==0) return true;
+  if(!getKey(line,key+"=",s,rep)) return false;
   val.clear();
   std::vector<std::string> words=getWords(s,"\t\n ,");
-  for(unsigned i=0;i<words.size();++i){
+  for(unsigned i=0; i<words.size(); ++i) {
     T v;
-    if(!convert(words[i],v))return false;
+    std::string s=words[i];
+    const std::string multi("@replicas:");
+    if(rep>=0 && startWith(s,multi)) {
+      s=s.substr(multi.length(),s.length());
+      std::vector<std::string> words=getWords(s,"\t\n ,");
+      plumed_assert(rep<static_cast<int>(words.size()));
+      s=words[rep];
+    }
+    if(!convert(s,v))return false;
     val.push_back(v);
   }
   return true;
@@ -163,14 +172,14 @@ bool Tools::parseVector(std::vector<std::string>&line,const std::string&key,std:
 template<typename T>
 void Tools::removeDuplicates(std::vector<T>& vec)
 {
-   std::sort(vec.begin(), vec.end());
-   vec.erase(std::unique(vec.begin(), vec.end()), vec.end());
+  std::sort(vec.begin(), vec.end());
+  vec.erase(std::unique(vec.begin(), vec.end()), vec.end());
 }
 
 inline
-bool Tools::parseFlag(std::vector<std::string>&line,const std::string&key,bool&val){
-  for(std::vector<std::string>::iterator p=line.begin();p!=line.end();++p){
-    if(key==*p){
+bool Tools::parseFlag(std::vector<std::string>&line,const std::string&key,bool&val) {
+  for(auto p=line.begin(); p!=line.end(); ++p) {
+    if(key==*p) {
       val=true;
       line.erase(p);
       return true;
@@ -181,7 +190,7 @@ bool Tools::parseFlag(std::vector<std::string>&line,const std::string&key,bool&v
 
 /// beware: this brings any number into a pbc that ranges from -0.5 to 0.5
 inline
-double Tools::pbc(double x){
+double Tools::pbc(double x) {
 #ifdef __PLUMED_PBC_WHILE
   while (x>0.5) x-=1.0;
   while (x<-0.5) x+=1.0;
@@ -199,29 +208,29 @@ double Tools::pbc(double x){
 }
 
 template<typename T>
-void Tools::convert(T i,std::string & str){
-        std::ostringstream ostr;
-        ostr<<i;
-        str=ostr.str();
+void Tools::convert(T i,std::string & str) {
+  std::ostringstream ostr;
+  ostr<<i;
+  str=ostr.str();
 }
 
 inline
 double Tools::fastpow(double base, int exp)
 {
-    if(exp<0){
-      exp=-exp;
-      base=1.0/base;
-    }
-    double result = 1.0;
-    while (exp)
-    {
-        if (exp & 1)
-            result *= base;
-        exp >>= 1;
-        base *= base;
-    }
+  if(exp<0) {
+    exp=-exp;
+    base=1.0/base;
+  }
+  double result = 1.0;
+  while (exp)
+  {
+    if (exp & 1)
+      result *= base;
+    exp >>= 1;
+    base *= base;
+  }
 
-    return result;
+  return result;
 }
 
 // Added by Y. Isaac Yang to calculate the summation of exponents
@@ -243,34 +252,6 @@ inline void exp_added(double& expsum,double expvalue)
 		expsum=expsum+std::log(1.0+exp(expvalue-expsum));
 	else
 		expsum=expvalue+std::log(1.0+exp(expsum-expvalue));
-}
-
-// exp(result)=exp(exp1)-exp(exp2);
-inline double exp_minus(double exp1,double exp2,bool& sign)
-{
-	if(exp1>exp2)
-	{
-		sign=false;
-		return exp1+std::log(1.0-exp(exp2-exp1));
-	}
-	else
-	{
-		sign=true;
-		return exp2+std::log(1.0-exp(exp1-exp2));
-	}
-}
-
-inline double exp_calc(double exp1,double exp2,bool sign1,bool sign2,bool& sign_fin)
-{
-	if(sign1==sign2)
-	{
-		sign_fin=sign1;
-		return exp_add(exp1,exp2);
-	}
-	else if(sign1)
-		return exp_minus(exp2,exp1,sign_fin);
-	else
-		return exp_minus(exp1,exp2,sign_fin);
 }
 
 }
