@@ -732,7 +732,7 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		{
 			log.printf("  Reading in FB values from file: %s\n",fb_input.c_str());
 			if(read_count==1)
-				log.printf("  the iteration step is %d",int(mcycle));
+				log.printf("  the reading iteration step is %d\n",int(mcycle));
 			else
 				log.printf("  with totally reading %d sets of coefficients, and the lastest one of iteration step %d will be used\n",int(read_count),int(mcycle));
 		}
@@ -1422,6 +1422,7 @@ void ITS_Bias::output_fb()
 				ofb.printField("norm_value",norml[i]);
 			ofb.printField();
 		}
+		ofb.printf("#!-----END-OF-FB-COEFFICIENTS-----\n\n");
 		ofb.flush();
 	}
 	if(mcycle%fbtrj_stride==0)
