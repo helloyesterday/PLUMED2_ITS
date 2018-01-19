@@ -95,16 +95,10 @@ ITS_BIAS ...
   TEMP_MIN=270
   PACE=2000
   PESHIFT=1500
-... ITS_BIAS
-\endverbatim
-
-\verbatim
-energy: ENERGY
-
-ITS_BIAS ...
-  LABEL=its
-  ARG=energy
-  FB_READ_FILE=fb.rest
+  FB_FILE=fb.data
+  FB_STRIDE=100
+  FBTRJ_FILE=fbtrj.data
+  FBTRJ_STRIDE=20
 ... ITS_BIAS
 \endverbatim
 
@@ -125,6 +119,10 @@ ITS_BIAS ...
   TEMP_MIN=270
   PACE=2000
   PESHIFT=1500
+  FB_FILE=fb.data
+  FB_STRIDE=100
+  FBTRJ_FILE=fbtrj.data
+  FBTRJ_STRIDE=20
 ... ITS_BIAS
 \endverbatim
 
@@ -175,14 +173,14 @@ void ITS_Bias::registerKeywords(Keywords& keys)
 	keys.add("optional","RB_FAC2","( default=0.0 ) the ratio of the old steps in rb updating");
 	keys.add("optional","STEP_SIZE","( default=1.0 )the step size of fb iteration");
 
-	keys.add("optional","FB_OUT_STRIDE","( default=1 ) the frequency to output the new fb values");
-	keys.add("optional","FBTRAJ_STRIDE","( default=1 ) the frequency to record the evoluation of fb values");
-	keys.add("optional","FB_TRAJ","( default=fbtrj.data ) a file recording the evolution of fb values");
-	keys.add("optional","NORM_TRAJ","( default=normltrj.data ) a file recording the evolution of normalize factors");
-	keys.add("optional","ITER_TRAJ","( default=itertrj.data ) a file recording the evolution of the fb iteration factors");
-	keys.add("optional","DERIV_TRAJ","( default=derivtrj.data ) a file recording the evolution of the derivation of fb factors");
-	keys.add("optional","PESHIFT_TRAJ","( default=peshift_trj.data ) a file recording the evolution of peshift");
-	keys.add("optional","FB_OUT","( default=fb.data ) a file to record the new fb values when they are update");
+	keys.add("optional","FB_FILE","( default=fb.data ) a file to record the new fb values when they are update");
+	keys.add("optional","FB_STRIDE","( default=1 ) the frequency to output the new fb values");
+	keys.add("optional","FBTRAJ_STRIDE","( default=FB_STRIDE )the frequency to record the evoluation of fb values");
+	keys.add("optional","FBTRAJ_FILE"," a file recording the evolution of fb values");
+	//~ keys.add("optional","NORM_TRAJ"," a file recording the evolution of normalize factors");
+	//~ keys.add("optional","ITER_TRAJ"," a file recording the evolution of the fb iteration factors");
+	//~ keys.add("optional","DERIV_TRAJ"," a file recording the evolution of the derivation of fb factors");
+	//~ keys.add("optional","PESHIFT_TRAJ"," a file recording the evolution of peshift");
 	
 	keys.add("optional","RW_TEMP","the temperatures used in the calcaulation of reweighting factors");
 	keys.add("optional","RW_FILE","a file of the reweighting factors");
@@ -215,10 +213,10 @@ ITS_Bias::~ITS_Bias()
 	{
 		ofb.close();
 		ofbtrj.close();
-		onormtrj.close();
-		opstrj.close();
-		if(is_ves)
-			oderiv.close();
+		//~ onormtrj.close();
+		//~ opstrj.close();
+		//~ if(is_ves)
+			//~ oderiv.close();
 	}
 	if(is_output)
 		ofw.close();
@@ -239,14 +237,15 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	rbfb_output(false),is_debug(false),potdis_output(false),
 	bias_linked(false),only_bias(false),
 	is_set_temps(false),is_set_ratios(false),is_norm_rescale(false),
-	output_start(0),start_cycle(0),fb_stride(1),fbtrj_stride(1),
+	read_fb(false),read_iter(false),fbtrj_output(false),
+	output_start(0),start_cycle(0),fb_stride(1),
 	bias_stride(1),potdis_step(1),rctid(0),
 	min_ener(1e38),pot_bin(1),dU(1),dvp2_complete(0)
 {
 	if(getNumberOfArguments()==0)
 		only_bias=true;
 	else if(getNumberOfArguments()>1)
-		error("this edition of ITS can only accept one CV");
+		plumed_merror("this edition of ITS can only accept one CV");
 		
 	std::vector<std::string> bias_labels(0);
 	parseVector("BIAS",bias_labels);
@@ -271,7 +270,7 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 			bias_ratio.resize(nbiases,1.0);
 	}
 	else if(only_bias)
-		error("the quantity of ARG and BIAS must be setup at last one");
+		plumed_merror("the quantity of ARG and BIAS must be setup at last one");
 
 	kB=plumed.getAtoms().getKBoltzmann();
 
@@ -287,13 +286,13 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	parse("FB_READ_FILE",fb_input);
 	
 	if(only_bias&&equiv_temp)
-		error("EQUIVALENT_TEMPERATURE must be used with the potential energy as the argument");
+		plumed_merror("EQUIVALENT_TEMPERATURE must be used with the potential energy as the argument");
 
 	unsigned _nreplica(0);
 	double _templ(-1),_temph(-1),_ratiol(-1),_ratioh(-1);
 	parse("NREPLICA",_nreplica);
 	if(_nreplica==0&&fb_input.size()==0)
-		error("NREPLICA must be set up or read from file.");
+		plumed_merror("NREPLICA must be set up or read from file.");
 	parse("TEMP_MIN",_templ);
 	parse("TEMP_MAX",_temph);
 	if(_templ>0&&_temph>0)
@@ -304,12 +303,12 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	if(_ratiol>0||_ratioh>0)
 	{
 		if(is_set_temps&&fb_input.size()==0)
-			error("the range of temperatures (TEMP_MIN and TEMP_MAX) and the range of replica ratio (REPLICA_RATIO_MIN and REPLICA_RATIO_MAX) cannot be setup simultaneously.");
+			plumed_merror("the range of temperatures (TEMP_MIN and TEMP_MAX) and the range of replica ratio (REPLICA_RATIO_MIN and REPLICA_RATIO_MAX) cannot be setup simultaneously.");
 		is_set_ratios=true;
 		if(_ratiol<0)
 		{
 			if(is_unlinear)
-				error("if you want to use unliner temperatures, the minimal replica ratio (REPLICA_RATIO_MIN) must be setup!");
+				plumed_merror("if you want to use unliner temperatures, the minimal replica ratio (REPLICA_RATIO_MIN) must be setup!");
 			_ratiol=0.0;
 		}
 		else
@@ -317,7 +316,7 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		if(_ratioh<0) _ratioh=1.0;
 	}
 	if(!is_set_ratios&&!is_set_temps&&fb_input.size()==0)
-		error("the range of temperatures must be setup (TEMP_MIN/TEMP_MAX or REPLICA_RATIO_MIN/REPLICA_RATIO_MAX) or read from file (FB_READ_FILE).");
+		plumed_merror("the range of temperatures must be setup (TEMP_MIN/TEMP_MAX or REPLICA_RATIO_MIN/REPLICA_RATIO_MAX) or read from file (FB_READ_FILE).");
 	
 	parse("START_CYCLE",start_cycle);
 
@@ -329,10 +328,6 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 
 	double _kB=kB;
 	double _peshift=peshift;
-	bool read_fb=false;
-	bool read_iter=false;
-	bool read_mean=false;
-	bool read_dev=false;
 	
 	sim_temp=-1;
 	parse("SIM_TEMP",sim_temp);
@@ -347,191 +342,35 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	
 	parse("START_CYCLE",start_cycle);
 	
+	unsigned read_count=0;
+	
 	if(fb_input.size()>0)
 	{
 		read_fb=true;
-		IFile ifb;
-		ifb.open(fb_input);
-		ifb.allowIgnoredFields();
-		
-		std::string iter_method="Tradtional";
-		if(ifb.FieldExist("ITERATE_METHOD"))
-			ifb.scanField("ITERATE_METHOD",iter_method);
-			
-		if(iter_method=="Traditional")
-		{
-			if(is_ves)
-				error("The iterate method is variational but the fb input file is a traditional input file");
-		}
-		else if(iter_method=="Variational")
-		{
-			if(!is_ves)
-				error("The iterate method is traditional but the fb input file is a variational input file");
-		}
-		else
-			error("unknown iterate method: \""+iter_method+"\"");
-
-		
-		if(ifb.FieldExist("ITERATE_STEP"))
-		{
-			int tmc=0;
-			ifb.scanField("ITERATE_STEP",tmc);
-			mcycle=tmc;
-		}
-
-		if(ifb.FieldExist("BOLTZMANN_CONSTANT"))
-			ifb.scanField("BOLTZMANN_CONSTANT",_kB);
-
-		if(ifb.FieldExist("PESHIFT"))
-			ifb.scanField("PESHIFT",_peshift);
-		peshift=_peshift;
-
-		if(!ifb.FieldExist("fb_value"))
-			error("cannot found \"fb_value\" in file \""+fb_input+"\"");
-		if(is_set_temps&&!ifb.FieldExist("temperature"))
-			error("cannot found \"temperature\" in file \""+fb_input+"\"");
-		if(is_set_ratios&&!ifb.FieldExist("replica_ratio"))
-			error("cannot found \"replica_ratio\" in file \""+fb_input+"\"");
-		double tmpfb;
-
-		int_ratios.resize(0);
-		int_temps.resize(0);
-
-		if(!is_const)
-		{
-			if(is_ves)
-			{
-				if(ifb.FieldExist("fb_iteration"))
-					read_iter=true;
-				if(!only_1st)
-				{
-					if(ifb.FieldExist("energy_mean"))
-						read_mean=true;
-					if(ifb.FieldExist("energy_dev"))
-						read_dev=true;
-					if(ifb.FieldExist("ENERGY_MIN"))
-						ifb.scanField("ENERGY_MIN",ener_min);
-					if(ifb.FieldExist("ENERGY_MAX"))
-						ifb.scanField("ENERGY_MAX",ener_max);
-				}
-			}
-			else
-			{
-				if(ifb.FieldExist("norm_value"))
-					read_norm=true;
-			}
-		}
-
-		while(ifb.scanField("fb_value",tmpfb))
-		{
-			double tmpt;
-			if(is_set_ratios)
-			{
-				ifb.scanField("replica_ratio",tmpt);
-				int_ratios.push_back(tmpt);
-				int_temps.push_back(sim_temp/tmpt);
-			}
-			else
-			{
-				ifb.scanField("temperature",tmpt);
-				int_temps.push_back(tmpt);
-				int_ratios.push_back(sim_temp/tmpt);
-			}
-			
-			if(is_ves)
-			{
-				if(read_iter)
-				{
-					double tmpif;
-					ifb.scanField("fb_iteration",tmpif);
-					fb_iter.push_back(tmpif);
-				}
-				if(read_mean)
-				{
-					double tmpmean;
-					ifb.scanField("energy_mean",tmpmean);
-					energy_mean.push_back(tmpmean);
-				}
-				if(read_dev)
-				{
-					double tmpdev;
-					ifb.scanField("energy_dev",tmpdev);
-					energy_dev.push_back(tmpdev);
-				}
-			}
-			else if(read_norm)
-			{
-				double tmpnb;
-				ifb.scanField("norm_value",tmpnb);
-				norml.push_back(tmpnb);
-			}
-
-			fb.push_back(tmpfb);
-			ifb.scanField();
-		}
-
-		if(is_set_ratios)
-		{
-			nreplica=int_ratios.size();
-			ratiol=ratioh=int_ratios[0];
-			for(unsigned i=1;i!=int_ratios.size();++i)
-			{
-				if(int_ratios[i]>ratioh)
-					ratioh=int_ratios[i];
-				if(int_ratios[i]<ratiol)
-					ratiol=int_ratios[i];
-			}
-			temph=sim_temp/ratiol;
-			templ=sim_temp/ratioh;
-		}
-		else
-		{
-			nreplica=int_temps.size();
-			templ=temph=int_temps[0];
-			for(unsigned i=1;i!=int_temps.size();++i)
-			{
-				if(int_temps[i]>temph)
-					temph=int_temps[i];
-				if(int_temps[i]<templ)
-					templ=int_temps[i];
-			}
-			ratioh=sim_temp/templ;
-			ratiol=sim_temp/temph;
-		}
-		if(fabs(_kB/kB-1)>1.0e-8)
-		{
-			double rescale=kB/_kB;
-			peshift*=rescale;
-			if(!only_1st)
-			{
-				ener_max*=rescale;
-				ener_min*=rescale;
-				for(unsigned i=0;i!=nreplica;++i)
-				{
-					energy_mean[i]*=rescale;
-					energy_dev[i]*=rescale;
-				}
-			}
-		}
-		ifb.close();
+		read_count=read_fb_file(fb_input,_kB,_peshift);
+		if(read_count==0)
+			plumed_merror("do not read anything in the file "+fb_file);
+		comm.Barrier();
+		if(use_mw && comm.Get_rank()==0)
+			multi_sim_comm.Barrier();
 	}
 	else
 	{
 		if(_nreplica<1)
-			error("the number of temperatures much be larger than 1");
+			plumed_merror("the number of temperatures much be larger than 1");
 		nreplica=_nreplica+1;
 
 		if(is_set_ratios)
 		{
 			if(_ratiol<0)
-				error("REPLICA_RATIO_MIN must be large than 0");
+				plumed_merror("REPLICA_RATIO_MIN must be large than 0");
 			ratiol=_ratiol;
 
 			if(_ratioh<0)
-				error("REPLICA_RATIO_MAX must be large than 0");
+				plumed_merror("REPLICA_RATIO_MAX must be large than 0");
 			ratioh=_ratioh;
 			if(ratiol>=ratioh)
-				error("the value of RATIO_BIAS_MAX must be large than RATIO_BIAS_MIN");
+				plumed_merror("the value of RATIO_BIAS_MAX must be large than RATIO_BIAS_MIN");
 				
 			templ=sim_temp/ratioh;
 			temph=sim_temp/ratiol;
@@ -550,14 +389,14 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		else
 		{
 			if(_templ<0)
-				error("TEMP_MIN must be large than 0");
+				plumed_merror("TEMP_MIN must be large than 0");
 			templ=_templ;
 
 			if(_temph<0)
-				error("TEMP_MAX must be large than 0");
+				plumed_merror("TEMP_MAX must be large than 0");
 			temph=_temph;
 			if(templ>=temph)
-				error("the value of TEMP_MAX must be large than TEMP_MIN");
+				plumed_merror("the value of TEMP_MAX must be large than TEMP_MIN");
 				
 			ratiol=sim_temp/temph;
 			ratioh=sim_temp/templ;
@@ -648,43 +487,70 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 
 	parse("PACE",update_step);
 	if(update_step==0)
-		error("PACE cannot be 0");
-
-	fb_trj="fbtrj.data";
-	parse("FB_TRAJ",fb_trj);
-	norm_trj="normltrj.data";
-	parse("NORM_TRAJ",norm_trj);
-	iter_trj="itertrj.data";
-	parse("ITER_TRAJ",iter_trj);
-	deriv_trj="derivtrj.data";
-	parse("DERIV_TRAJ",deriv_trj);
-	peshift_trj="peshift_trj.data";
-	parse("PESHIFT_TRAJ",peshift_trj);
+		plumed_merror("PACE cannot be 0");
+		
 	fb_file="fb.data";
-	parse("FB_OUT",fb_file);
-	parse("FB_OUT_STRIDE",fb_stride);
+	parse("FB_FILE",fb_file);
+	parse("FB_STRIDE",fb_stride);
+
+	parse("FBTRAJ_FILE",fb_trj);
+	if(fb_trj.size()>0)
+		fbtrj_output=true;
+	fbtrj_stride=fb_stride;
 	parse("FBTRAJ_STRIDE",fbtrj_stride);
+
+	//~ parse("NORM_TRAJ",norm_trj);
+	//~ parse("ITER_TRAJ",iter_trj);
+	//~ if(((!is_ves)&&norm_trj.size()>0)||(is_ves&&iter_trj.size()>0))
+		//~ norm_output=true;
+	
+	//~ deriv_trj="derivtrj.data";
+	//~ parse("DERIV_TRAJ",deriv_trj);
+	
+	//~ parse("PESHIFT_TRAJ",peshift_trj);
+	//~ if(peshift_trj.size()>0)
+		//~ peshift_output=true;
+	
+	if(getRestart()&&!read_fb)
+	{
+		read_count=read_fb_file(fb_file,_kB,_peshift);
+		if(read_count==0)
+			plumed_merror("do not read anything in the file "+fb_file);
+		comm.Barrier();
+		if(use_mw && comm.Get_rank()==0)
+			multi_sim_comm.Barrier();
+	}
 
 	if(!equiv_temp&&!is_const)
 	{
-		ofb.link(*this);
-		ofb.open(fb_file);
-
-		ofbtrj.link(*this);
-		ofbtrj.open(fb_trj);
-
-		onormtrj.link(*this);
-		if(is_ves)
+		setupOFile(fb_file,ofb,use_mw);
+		ofb.addConstantField("ITERATE_METHOD");
+		ofb.addConstantField("ITERATE_STEP");
+		ofb.addConstantField("BOLTZMANN_CONSTANT");
+		ofb.addConstantField("PESHIFT");
+		ofb.addConstantField("COEFFICIENT_TYPE");
+		ofb.addConstantField("NREPLICA");
+		if(is_ves&&!only_1st)
 		{
-			onormtrj.open(iter_trj);
-			oderiv.link(*this);
-			oderiv.open(deriv_trj);
+			ofb.addConstantField("ENERGY_MIN");
+			ofb.addConstantField("ENERGY_MAX");
 		}
-		else
-			onormtrj.open(norm_trj);
+
+		if(fbtrj_output)
+			setupOFile(fb_trj,ofbtrj,use_mw);
+			
+		//~ if(is_ves)
+		//~ {
+			//~ if(norm_output)
+				//~ setupOFile(iter_trj,onormtrj,use_mw);
+			//~ 
+			//~ setupOFile(deriv_trj,oderiv,use_mw);
+		//~ }
+		//~ else if(norm_output)
+			//~ setupOFile(norm_trj,onormtrj,use_mw);
 		
-		opstrj.link(*this);
-		opstrj.open(peshift_trj);
+		//~ if(peshift_output)
+			//~ setupOFile(peshift_trj,opstrj,use_mw);
 	}
 	
 	parse("BIAS_FILE",bias_file);
@@ -696,10 +562,10 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		bias_min=0;
 		parse("BIAS_MIN",bias_min);
 		if(bias_max<=bias_min)
-			error("BIAS_MAX must be larger than bias_min");
+			plumed_merror("BIAS_MAX must be larger than bias_min");
 		parse("BIAS_BIN",bias_bins);
 		if(bias_bins<=1)
-			error("BIAS_BIN must be larger than 1");
+			plumed_merror("BIAS_BIN must be larger than 1");
 		parse("BIAS_STRIDE",bias_stride);
 		d_pot=(bias_max-bias_min)/(bias_bins-1);
 	}
@@ -738,17 +604,17 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 			if(!only_1st)
 			{
 				if(ener_max<=ener_min)
-				error("TARGET_MAX must be larger than TARGET_MIN");
+				plumed_merror("TARGET_MAX must be larger than TARGET_MIN");
 
 				ntarget=floor((ener_max-ener_min)/dU)+1;
-				if(!(read_mean&&read_dev))
-					error("2nd order derivative calculation is open but there is no mean or deviation value in fb recording file");
+				//~ if(!(read_mean&&read_dev))
+					//~ plumed_merror("2nd order derivative calculation is open but there is no mean or deviation value in fb recording file");
 				dvp2_complete=calc_deriv2();
 				if(dvp2_complete<0.7)
 				{
 					std::string dpc;
 					Tools::convert(dvp2_complete,dpc);
-					error("The compuatational comple of 2nd order derivative ("+dpc+") is too low!");
+					plumed_merror("The compuatational comple of 2nd order derivative ("+dpc+") is too low!");
 				}
 			}
 		}
@@ -769,7 +635,7 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	parse("OUTPUT_START",output_start);
 
 	if(rw_file.size()==0&&rw_temp.size()>0)
-		error("RW_TEMP is setted but RW_FILE is not setted");
+		plumed_merror("RW_TEMP is setted but RW_FILE is not setted");
 
 	if(rw_file.size()>0)
 	{
@@ -781,7 +647,7 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 				if(rw_temp[i]<=temph&&rw_temp[i]>=templ)
 					rw_beta.push_back(1.0/(kB*rw_temp[i]));
 				else
-					error("the reweighting temperature must between TEMP_MIN and TEMP_MAX");
+					plumed_merror("the reweighting temperature must between TEMP_MIN and TEMP_MAX");
 			}
 		}
 		else
@@ -863,13 +729,33 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		log.printf("    RB_FAC1: %f\n",rb_fac1);
 		log.printf("    RB_FAC2: %f\n",rb_fac2);
 		if(read_fb)
+		{
 			log.printf("  Reading in FB values from file: %s\n",fb_input.c_str());
+			if(read_count==1)
+				log.printf("  the iteration step is %d",int(mcycle));
+			else
+				log.printf("  with totally reading %d sets of coefficients, and the lastest one of iteration step %d will be used\n",int(read_count),int(mcycle));
+		}
+		else if(getRestart())
+		{
+			log.printf("  Restart running with reading in FB values from file: %s\n",fb_file.c_str());
+			log.printf("  with totally reading %d sets of coefficients, and the lastest one of iteration step %d will be used\n",int(read_count),int(mcycle));
+		}
 		else if(is_unlinear)
 			log.printf("  Unlinear replicas is open");
-			
-		log.printf("  with temperatue and FB value: (index temperature replica_ratio beta_k fb)\n");
-		for(unsigned i=0;i!=nreplica;++i)
-			log.printf("    %d\t%f\t%f\t%f\t%f\n",i,int_temps[i],int_ratios[i],betak[i],fb[i]);
+
+		if(read_norm)
+		{
+			log.printf("  with temperatue and FB value: (index temperature replica_ratio beta_k fb norml)\n");
+			for(unsigned i=0;i!=nreplica;++i)
+				log.printf("    %d\t%f\t%f\t%f\t%f\t%f\n",i,int_temps[i],int_ratios[i],betak[i],fb[i],norml[i]);
+		}
+		else
+		{
+			log.printf("  with temperatue and FB value: (index temperature replica_ratio beta_k fb)\n");
+			for(unsigned i=0;i!=nreplica;++i)
+				log.printf("    %d\t%f\t%f\t%f\t%f\n",i,int_temps[i],int_ratios[i],betak[i],fb[i]);
+		}
 		log.printf("    with temperatues of FB from %f to %f\n",templ,temph);
 		log.printf("    with ratio of replica from %f to %f\n",ratiol,ratioh);
 		
@@ -879,13 +765,6 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		if(fabs(_kB/kB-1)>1.0e-8)
 			log.printf("    with Original PESHIFT value: %f (with boltzmann constant %f)\n",
 				_peshift,_kB);
-		if(read_norm)
-		{
-			log.printf("  Reading in normalization value from file: %s\n",
-				fb_input.c_str());
-			for(unsigned i=0;i!=norml.size();++i)
-				log.printf("    %d\t%f\n",i,norml[i]);
-		}
 		if(use_mw)
 		{
 			log.printf("  Using multiple walkers");
@@ -949,8 +828,9 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 			log.printf("  Using debug mod with output file: %s\n",debug_file.c_str());
 
 		log<<"Bibliography "<<
-			plumed.cite("Gao, J. Chem. Phys. 128, 064105 (2008)")<<
-			plumed.cite("Gao, J. Chem. Phys. 128, 134111 (2008)");
+			plumed.cite("Gao, J. Chem. Phys. 128, 064105 (2008)");
+		if(!is_ves)
+			log<<plumed.cite("Gao, J. Chem. Phys. 128, 134111 (2008)");
 		if(bias_linked)
 			log<<plumed.cite("Yang, Zhang, Che, Yang, and Gao, J. Chem. Phys. 144, 094105 (2016)");
 		log<<"\n";
@@ -1360,7 +1240,7 @@ void ITS_Bias::fb_iteration()
 		odebug.printf("--- FB update ---\n");
 	}
 	if(is_nan)
-		error("FB value become NaN. See debug file or \"error.data\" file for detailed information.");
+		plumed_merror("FB value become NaN. See debug file or \"error.data\" file for detailed information.");
 }
 
 void ITS_Bias::fb_variational()
@@ -1451,20 +1331,20 @@ void ITS_Bias::fb_variational()
 			is_nan=true;
 	}
 
-	if(mcycle%fbtrj_stride==0)
-	{
-		oderiv.fmtField(" %f");
-		oderiv.printField("step",int(mcycle));
-		for(unsigned i=0;i!=nreplica;++i)
-		{
-			std::string id;
-			Tools::convert(i,id);
-			std::string fbid="FB"+id;
-			oderiv.printField(fbid,deriv_aver[i]);
-		}
-		oderiv.printField();
-		oderiv.flush();
-	}
+	//~ if(norm_output&&mcycle%fbtrj_stride==0)
+	//~ {
+		//~ oderiv.fmtField(" %f");
+		//~ oderiv.printField("step",int(mcycle));
+		//~ for(unsigned i=0;i!=nreplica;++i)
+		//~ {
+			//~ std::string id;
+			//~ Tools::convert(i,id);
+			//~ std::string fbid="FB"+id;
+			//~ oderiv.printField(fbid,deriv_aver[i]);
+		//~ }
+		//~ oderiv.printField();
+		//~ oderiv.flush();
+	//~ }
 
 	if(is_debug||is_nan)
 	{
@@ -1498,26 +1378,26 @@ void ITS_Bias::fb_variational()
 		odebug.printf("--- Variational END ---\n");
 	}
 	if(is_nan)
-		error("FB value become NaN. See debug file or \"error.data\" file for detailed information.");
+		plumed_merror("FB value become NaN. See debug file or \"error.data\" file for detailed information.");
 }
 
 void ITS_Bias::output_fb()
 {
 	if(mcycle%fb_stride==0)
 	{
-		ofb.rewind();
-		ofb.addConstantField("ITERATE_METHOD");
 		if(is_ves)
 			ofb.printField("ITERATE_METHOD","Variational");
 		else
 			ofb.printField("ITERATE_METHOD","Traditional");
-		ofb.addConstantField("ITERATE_STEP").printField("ITERATE_STEP",int(mcycle));
-		ofb.addConstantField("BOLTZMANN_CONSTANT").printField("BOLTZMANN_CONSTANT",kB);
-		ofb.addConstantField("PESHIFT").printField("PESHIFT",peshift);
+		ofb.printField("ITERATE_STEP",int(mcycle));
+		ofb.printField("BOLTZMANN_CONSTANT",kB);
+		ofb.printField("PESHIFT",peshift);
+		ofb.printField("COEFFICIENT_TYPE",(is_set_temps?"TEMPERATURE":"RATIO"));
+		ofb.printField("NREPLICA",int(nreplica));
 		if(is_ves&&!only_1st)
 		{
-			ofb.addConstantField("ENERGY_MIN").printField("ENERGY_MIN",ener_min);
-			ofb.addConstantField("ENERGY_MAX").printField("ENERGY_MAX",ener_max);
+			ofb.printField("ENERGY_MIN",ener_min);
+			ofb.printField("ENERGY_MAX",ener_max);
 		}
 		for(unsigned i=0;i!=nreplica;++i)
 		{
@@ -1546,33 +1426,303 @@ void ITS_Bias::output_fb()
 	}
 	if(mcycle%fbtrj_stride==0)
 	{
-		ofbtrj.fmtField(" %f");
-		ofbtrj.printField("step",int(mcycle));
-		onormtrj.fmtField(" %f");
-		onormtrj.printField("step",int(mcycle));
-		opstrj.fmtField(" %f");
-		opstrj.printField("step",int(mcycle));
-		opstrj.printField("PESHIFT",peshift);
-		for(unsigned i=0;i!=nreplica;++i)
+		if(fbtrj_output)
 		{
-			std::string id;
-			Tools::convert(i,id);
-			std::string fbid="FB"+id;
-			ofbtrj.printField(fbid,fb[i]);
-			if(is_ves)
-				onormtrj.printField(fbid,fb_iter[i]);
-			else
-				onormtrj.printField(fbid,norml[i]);
+			ofbtrj.fmtField(" %f");
+			ofbtrj.printField("step",int(mcycle));
 		}
-		ofbtrj.printField();
-		ofbtrj.flush();
-		onormtrj.printField();
-		onormtrj.flush();
-		opstrj.printField();
-		opstrj.flush();
+		//~ if(norm_output)
+		//~ {
+			//~ onormtrj.fmtField(" %f");
+			//~ onormtrj.printField("step",int(mcycle));
+		//~ }
+		if(fbtrj_output)
+		{
+			for(unsigned i=0;i!=nreplica;++i)
+			{
+				std::string id;
+				Tools::convert(i,id);
+				std::string fbid="FB"+id;
+				
+				if(fbtrj_output)
+					ofbtrj.printField(fbid,fb[i]);
+
+				//~ if(norm_output)
+				//~ {
+					//~ if(is_ves)
+						//~ onormtrj.printField(fbid,fb_iter[i]);
+					//~ else
+						//~ onormtrj.printField(fbid,norml[i]);
+				//~ }
+			}
+			ofbtrj.printField();
+			ofbtrj.flush();
+		}
+		//~ if(norm_output)
+		//~ {
+			//~ onormtrj.printField();
+			//~ onormtrj.flush();
+		//~ }
+		//~ if(peshift_output)
+		//~ {
+			//~ opstrj.fmtField(" %f");
+			//~ opstrj.printField("step",int(mcycle));
+			//~ opstrj.printField("PESHIFT",peshift);
+			//~ opstrj.printField();
+			//~ opstrj.flush();
+		//~ }
 	}
 	if(bias_output&&mcycle%bias_stride==0)
 		output_bias();
+}
+
+void ITS_Bias::setupOFile(std::string& file_name, OFile& ofile, const bool multi_sim_single_files)
+{
+    ofile.link(*this);
+    std::string fname=file_name;
+    if(multi_sim_single_files)
+    {
+		unsigned int r=0;
+		if(comm.Get_rank()==0)
+			r=multi_sim_comm.Get_rank();
+		comm.Bcast(r,0);
+		if(r>0)
+			fname="/dev/null";
+		ofile.enforceSuffix("");
+    }
+    ofile.open(fname);
+}
+
+unsigned ITS_Bias::read_fb_file(const std::string& fname,double& _kB,double& _peshift)
+{	
+	IFile ifb;
+    ifb.link(*this);
+    if(use_mw)
+		ifb.enforceSuffix("");
+		
+	if(!ifb.FileExist(fname))
+		plumed_merror("Cannot find fb file " + fname );
+		
+    ifb.open(fname);
+    
+	ifb.allowIgnoredFields();
+	
+	std::string iter_method="Tradtional";
+	
+	unsigned _ntemp=nreplica;
+
+	unsigned read_count=0;
+	while(ifb)
+	{
+		if(ifb.FieldExist("ITERATE_METHOD"))
+			ifb.scanField("ITERATE_METHOD",iter_method);
+
+		if(ifb.FieldExist("ITERATE_STEP"))
+		{
+			int tmc=0;
+			ifb.scanField("ITERATE_STEP",tmc);
+			mcycle=tmc;
+		}
+
+		if(ifb.FieldExist("BOLTZMANN_CONSTANT"))
+			ifb.scanField("BOLTZMANN_CONSTANT",_kB);
+
+		if(ifb.FieldExist("PESHIFT"))
+			ifb.scanField("PESHIFT",_peshift);
+		
+		std::string coe_type="TEMPERATURE";
+		if(ifb.FieldExist("COEFFICIENT_TYPE"))
+			ifb.scanField("COEFFICIENT_TYPE",coe_type);
+		if(coe_type=="TEMPERATURE")
+		{
+			is_set_temps=true;
+			is_set_ratios=false;
+		}
+		else if(coe_type=="RATIO")
+		{
+			is_set_temps=false;
+			is_set_ratios=true;
+		}
+		else
+			plumed_merror("unrecognized COEFFICIENT_TYPE "+coe_type);
+			
+		if(ifb.FieldExist("PESHIFT"))
+			ifb.scanField("PESHIFT",_peshift);
+
+		if(ifb.FieldExist("NREPLICA"))
+		{
+			int int_ntemp;
+			ifb.scanField("NREPLICA",int_ntemp);
+			_ntemp=int_ntemp;
+		}
+		
+		int_ratios.resize(_ntemp);
+		int_temps.resize(_ntemp);
+		fb.resize(_ntemp);
+
+		if(ifb)
+		{
+			if(!ifb.FieldExist("fb_value"))
+				plumed_merror("cannot found \"fb_value\" in file \""+fb_input+"\"");
+			if(is_set_temps&&!ifb.FieldExist("temperature"))
+				plumed_merror("cannot found \"temperature\" in file \""+fb_input+"\"");
+			if(is_set_ratios&&!ifb.FieldExist("replica_ratio"))
+				plumed_merror("cannot found \"replica_ratio\" in file \""+fb_input+"\"");
+		}
+		else
+			break;
+
+		bool read_mean=false;
+		bool read_dev=false;
+
+		if(!is_const)
+		{
+			if(is_ves)
+			{
+				if(ifb.FieldExist("fb_iteration"))
+					read_iter=true;
+				if(!only_1st)
+				{
+					if(ifb.FieldExist("energy_mean"))
+						read_mean=true;
+					if(ifb.FieldExist("energy_dev"))
+						read_dev=true;
+					if(ifb.FieldExist("ENERGY_MIN"))
+						ifb.scanField("ENERGY_MIN",ener_min);
+					if(ifb.FieldExist("ENERGY_MAX"))
+						ifb.scanField("ENERGY_MAX",ener_max);
+				}
+			}
+			else
+			{
+				if(ifb.FieldExist("norm_value"))
+					read_norm=true;
+			}
+		}
+		
+		if(is_ves)
+		{
+			if(read_iter)
+				fb_iter.resize(_ntemp);
+			if(read_mean)
+				energy_mean.resize(_ntemp);
+			if(read_dev)
+				energy_dev.resize(_ntemp);
+		}
+		else if(read_norm)
+			norml.resize(_ntemp);
+		
+		double tmpfb;
+		
+		for(unsigned i=0;i!=_ntemp;++i)
+		{
+			ifb.scanField("fb_value",tmpfb);
+			double tmpt;
+			if(is_set_ratios)
+			{
+				ifb.scanField("replica_ratio",tmpt);
+				int_ratios[i]=tmpt;
+				int_temps[i]=sim_temp/tmpt;
+			}
+			else
+			{
+				ifb.scanField("temperature",tmpt);
+				int_temps[i]=tmpt;
+				int_ratios[i]=sim_temp/tmpt;
+			}
+			
+			if(is_ves)
+			{
+				if(read_iter)
+				{
+					double tmpif;
+					ifb.scanField("fb_iteration",tmpif);
+					fb_iter[i]=tmpif;
+				}
+				if(read_mean)
+				{
+					double tmpmean;
+					ifb.scanField("energy_mean",tmpmean);
+					energy_mean[i]=tmpmean;
+				}
+				if(read_dev)
+				{
+					double tmpdev;
+					ifb.scanField("energy_dev",tmpdev);
+					energy_dev[i]=tmpdev;
+				}
+			}
+			else if(read_norm)
+			{
+				double tmpnb;
+				ifb.scanField("norm_value",tmpnb);
+				norml[i]=tmpnb;
+			}
+			fb[i]=tmpfb;
+			ifb.scanField();
+		}
+		++read_count;
+	}
+	if(iter_method=="Traditional")
+	{
+		if(is_ves)
+			plumed_merror("The iterate method is variational but the fb input file is a traditional input file");
+	}
+	else if(iter_method=="Variational")
+	{
+		if(!is_ves)
+			plumed_merror("The iterate method is traditional but the fb input file is a variational input file");
+	}
+	else
+		plumed_merror("unknown iterate method: \""+iter_method+"\"");
+	
+	peshift=_peshift;
+	
+	if(is_set_ratios)
+	{
+		nreplica=_ntemp;
+		ratiol=ratioh=int_ratios[0];
+		for(unsigned i=1;i!=int_ratios.size();++i)
+		{
+			if(int_ratios[i]>ratioh)
+				ratioh=int_ratios[i];
+			if(int_ratios[i]<ratiol)
+				ratiol=int_ratios[i];
+		}
+		temph=sim_temp/ratiol;
+		templ=sim_temp/ratioh;
+	}
+	else
+	{
+		nreplica=_ntemp;
+		templ=temph=int_temps[0];
+		for(unsigned i=1;i!=int_temps.size();++i)
+		{
+			if(int_temps[i]>temph)
+				temph=int_temps[i];
+			if(int_temps[i]<templ)
+				templ=int_temps[i];
+		}
+		ratioh=sim_temp/templ;
+		ratiol=sim_temp/temph;
+	}
+	if(fabs(_kB/kB-1)>1.0e-8)
+	{
+		double rescale=kB/_kB;
+		peshift*=rescale;
+		if(!only_1st)
+		{
+			ener_max*=rescale;
+			ener_min*=rescale;
+			for(unsigned i=0;i!=nreplica;++i)
+			{
+				energy_mean[i]*=rescale;
+				energy_dev[i]*=rescale;
+			}
+		}
+	}
+	ifb.close();
+	return read_count;
 }
 
 double ITS_Bias::reweight(double rw_beta,double energy)

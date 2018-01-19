@@ -142,6 +142,11 @@ private:
 	bool is_set_ratios;
 	bool is_norm_rescale;
 	bool is_direct;
+	bool read_fb;
+	bool read_iter;
+	bool fbtrj_output;
+	//~ bool norm_output;
+	//~ bool peshift_output;
 	unsigned update_step;
 	unsigned output_step;
 	unsigned output_start;
@@ -172,9 +177,9 @@ private:
 
 	OFile ofb;
 	OFile ofbtrj;
-	OFile onormtrj;
-	OFile oderiv;
-	OFile opstrj;
+	//~ OFile onormtrj;
+	//~ OFile oderiv;
+	//~ OFile opstrj;
 	OFile ofw;
 	OFile obias;
 	OFile orbfb;
@@ -211,6 +216,8 @@ private:
 	void output_fb();
 	void mw_merge_rbfb();
 	void output_bias();
+	void setupOFile(std::string& file_name, OFile& ofile, const bool multi_sim_single_files);
+	unsigned read_fb_file(const std::string& fname,double& _kB,double& _peshift);
 	double calc_deriv2();
 
 	inline void coe_rescale(double shift,std::vector<double>& coe);
