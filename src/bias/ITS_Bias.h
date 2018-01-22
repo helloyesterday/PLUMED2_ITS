@@ -92,6 +92,9 @@ private:
 	std::vector<double> rw_temp;
 	std::vector<double> rw_beta;
 	std::vector<double> rw_factor;
+	std::vector<double> rw_dth;
+	std::vector<double> rw_dtl;
+	std::vector<unsigned> rw_rctid;
 	std::vector<unsigned> pot_dis;
 	std::vector<std::string> rw_tstr;
 
@@ -116,8 +119,7 @@ private:
 	double fb_bias;
 	double rb_fac1;
 	double rb_fac2;
-	double rb_slow;
-	double rb_slow2;
+	double fb0;
 	double bias_min;
 	double bias_max;
 	double d_pot;
@@ -125,7 +127,7 @@ private:
 
 	bool equiv_temp;
 	bool is_const;
-	bool is_output;
+	bool rw_output;
 	bool is_ves;
 	bool read_norm;
 	bool only_1st;
@@ -145,11 +147,12 @@ private:
 	bool read_fb;
 	bool read_iter;
 	bool fbtrj_output;
+	bool is_rw_rct;
 	//~ bool norm_output;
 	//~ bool peshift_output;
 	unsigned update_step;
-	unsigned output_step;
-	unsigned output_start;
+	unsigned rw_stride;
+	unsigned rw_start;
 	unsigned start_cycle;
 	unsigned fb_stride;
 	unsigned fbtrj_stride;
@@ -193,6 +196,8 @@ private:
 	double pot_max;
 	double pot_bin;
 	double tot_bias;
+	double sim_dtl;
+	double sim_dth;
 
 	unsigned ntarget;
 	double ener_min;
@@ -207,6 +212,7 @@ private:
 	Value* valueForce;
 	Value* valueRct;
 	Value* valueRBias;
+	Value* valueRwfb;
 
 	inline void update_rbfb();
 	inline void update_rbfb_direct();
@@ -219,6 +225,9 @@ private:
 	void setupOFile(std::string& file_name, OFile& ofile, const bool multi_sim_single_files);
 	unsigned read_fb_file(const std::string& fname,double& _kB,double& _peshift);
 	double calc_deriv2();
+	unsigned find_rw_id(double rwtemp,double& dtl,double& dth);
+	double find_rw_fb(unsigned rwid,double dtl,double dth);
+	double find_rw_fb(double rwtemp);
 
 	inline void coe_rescale(double shift,std::vector<double>& coe);
 	inline void fb_rescale(double shift){coe_rescale(shift,fb);}
@@ -236,8 +245,7 @@ public:
 	explicit ITS_Bias(const ActionOptions&);
 	~ITS_Bias();
 	void calculate();
-	double reweight(double rw_beta,double energy);
-	double reweight(double rw_beta){return exp(-rw_beta*shift_energy-gfsum);}
+	double calc_bias(double _beta){return -gfsum/_beta-shift_energy;}
 	static void registerKeywords(Keywords& keys);
 };
 

@@ -134,11 +134,12 @@ PLUMED_REGISTER_ACTION(ITS_Bias,"ITS_BIAS")
 void ITS_Bias::registerKeywords(Keywords& keys)
 {
 	Bias::registerKeywords(keys);
-	keys.addOutputComponent("energy","default","the instantaneous value of the potential energy of the system");
-	keys.addOutputComponent("effective","default","the instantaneous value of the effective potential");
-	keys.addOutputComponent("force","default","the instantaneous value of the bias force");
-	keys.addOutputComponent("rct","default","the reweighting revise factor");
 	keys.addOutputComponent("rbias","default","the revised bias potential using rct");
+	keys.addOutputComponent("energy","default","the instantaneous value of the potential energy of the system");
+	keys.addOutputComponent("effective","DEBUG_FILE","the instantaneous value of the effective potential");
+	keys.addOutputComponent("rct","DEBUG_FILE","the reweighting revise factor");
+	keys.addOutputComponent("force","DEBUG_FILE","the instantaneous value of the bias force");
+	keys.addOutputComponent("rwfb","DEBUG_FILE","the revised bias potential using rct");
 	ActionWithValue::useCustomisableComponents(keys);
 	keys.remove("ARG");
     keys.add("optional","ARG","the argument(CVs) here must be the potential energy. If no argument is setup, only bias will be integrated in this method."); 
@@ -185,7 +186,8 @@ void ITS_Bias::registerKeywords(Keywords& keys)
 	keys.add("optional","RW_TEMP","the temperatures used in the calcaulation of reweighting factors");
 	keys.add("optional","RW_FILE","a file of the reweighting factors");
 	keys.add("optional","RW_STRIDE","the frequency of reweighting factor output");
-	keys.add("optional","OUTPUT_START","the start step of reweighting factor output");
+	keys.add("optional","RW_START","the start step of reweighting factor output");
+	//~ keys.addFlag("REVISED_REWEIGHT",false,"calculate the c(t) value at reweighting factor output file");
 	keys.add("optional","FB_READ_FILE","a file of reading fb values (include temperatures and peshift)");
 	keys.add("optional","BIAS_FILE","a file to output the function of bias potential");
 	keys.add("optional","RBFB_FILE","a file to output the evoluation of rbfb");
@@ -218,7 +220,7 @@ ITS_Bias::~ITS_Bias()
 		//~ if(is_ves)
 			//~ oderiv.close();
 	}
-	if(is_output)
+	if(rw_output)
 		ofw.close();
 	if(is_debug)
 		odebug.close();
@@ -232,13 +234,13 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	PLUMED_BIAS_INIT(ao),update_start(0),rct(0),
 	step(0),norm_step(0),mcycle(0),iter_limit(0),
 	fb_init(0.0),fb_bias(0.0),rb_fac1(0.5),rb_fac2(0.0),step_size(1.0),
-	is_const(false),is_output(false),is_ves(false),
+	is_const(false),rw_output(false),is_ves(false),
 	read_norm(false),only_1st(false),bias_output(false),
 	rbfb_output(false),is_debug(false),potdis_output(false),
 	bias_linked(false),only_bias(false),
 	is_set_temps(false),is_set_ratios(false),is_norm_rescale(false),
 	read_fb(false),read_iter(false),fbtrj_output(false),
-	output_start(0),start_cycle(0),fb_stride(1),
+	rw_stride(1),rw_start(0),start_cycle(0),fb_stride(1),
 	bias_stride(1),potdis_step(1),rctid(0),
 	min_ener(1e38),pot_bin(1),dU(1),dvp2_complete(0)
 {
@@ -455,27 +457,6 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		is_norm_rescale=true;
 		fb_bias=std::log(step_size);
 	}
-
-	double min_dtemp=1e38;
-	for(unsigned i=0;i!=nreplica;++i)
-	{
-		if(is_set_ratios)
-			betak.push_back(beta0*int_ratios[i]);
-		else if(is_set_temps)
-			betak.push_back(1.0/(kB*int_temps[i]));
-
-		if(!read_fb)
-			fb.push_back(-exp(fb_init*(betak[0]-betak[i])));
-		
-		double now_dtemp=fabs(int_temps[i]-sim_temp);
-		if(now_dtemp<min_dtemp)
-		{
-			min_dtemp=now_dtemp;
-			rctid=i;
-		}
-	}
-	
-	rct=(-fb[rctid]-std::log(double(nreplica)))/beta0;
 	
 	if(!read_norm)
 		norml.assign(nreplica,0);
@@ -520,6 +501,25 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		if(use_mw && comm.Get_rank()==0)
 			multi_sim_comm.Barrier();
 	}
+	
+	
+	betak.resize(nreplica);
+	if(is_set_ratios)
+		int_temps.resize(nreplica);
+	for(unsigned i=0;i!=nreplica;++i)
+	{
+		if(is_set_ratios)
+		{
+			betak[i]=beta0*int_ratios[i];
+			int_temps[i]=sim_temp/int_ratios[i];
+		}
+		else
+			betak[i]=1.0/(kB*int_temps[i]);
+	}
+	
+	rctid=find_rw_id(sim_temp,sim_dtl,sim_dth);
+	fb0=find_rw_fb(rctid,sim_dtl,sim_dth);
+	rct=-(fb0+std::log(double(nreplica)))/beta0;
 
 	if(!equiv_temp&&!is_const)
 	{
@@ -538,7 +538,7 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 
 		if(fbtrj_output)
 			setupOFile(fb_trj,ofbtrj,use_mw);
-			
+
 		//~ if(is_ves)
 		//~ {
 			//~ if(norm_output)
@@ -631,36 +631,37 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 
 	parseVector("RW_TEMP",rw_temp);
 	parse("RW_FILE",rw_file);
-	parse("RW_STRIDE",output_step);
-	parse("OUTPUT_START",output_start);
+	parse("RW_STRIDE",rw_stride);
+	parse("RW_START",rw_start);
 
 	if(rw_file.size()==0&&rw_temp.size()>0)
 		plumed_merror("RW_TEMP is setted but RW_FILE is not setted");
 
 	if(rw_file.size()>0)
 	{
-		is_output=true;
+		//~ parseFlag("REVISED_REWEIGHT",is_rw_rct);
+		rw_output=true;
 		if(rw_temp.size()>0)
 		{
+			rw_rctid.resize(rw_temp.size());
+			rw_dth.resize(rw_temp.size());
+			rw_dtl.resize(rw_temp.size());
 			for(unsigned i=0;i!=rw_temp.size();++i)
 			{
 				if(rw_temp[i]<=temph&&rw_temp[i]>=templ)
 					rw_beta.push_back(1.0/(kB*rw_temp[i]));
 				else
 					plumed_merror("the reweighting temperature must between TEMP_MIN and TEMP_MAX");
+				rw_rctid[i]=find_rw_id(rw_temp[i],rw_dtl[i],rw_dth[i]);
 			}
 		}
 		else
 		{
-			rw_temp.push_back(sim_temp);
-			rw_beta.push_back(beta0);
+			plumed_merror("RW_TEMP is not setup");
 		}
 		rw_factor.resize(rw_temp.size());
 
-		ofw.link(*this);
-		ofw.open(rw_file);
-		if(!is_const)
-			ofw.printf("#! Warning: As the fb values have not been fixed yet, the reweighting factor may be meaningless!\n");
+		setupOFile(rw_file,ofw,use_mw);
 		for(unsigned i=0;i!=rw_temp.size();++i)
 		{
 			std::string tt;
@@ -668,9 +669,6 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 			tt="rw_temperature_"+tt;
 			ofw.addConstantField(tt).printField(tt,rw_temp[i]);
 		}
-
-		if(output_step==0)
-			output_step=update_step;
 	}
 
 	parse("DEBUG_FILE",debug_file);
@@ -688,18 +686,24 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 
 	checkRead();
 
-	addComponent("energy"); componentIsNotPeriodic("energy");
-	valueEnergy=getPntrToComponent("energy");
-	addComponent("effective"); componentIsNotPeriodic("effective");
-	valueEff=getPntrToComponent("effective");
-	addComponent("force"); componentIsNotPeriodic("force");
-	valueForce=getPntrToComponent("force");
-	addComponent("rct"); componentIsNotPeriodic("rct");
-	valueRct=getPntrToComponent("rct");
 	addComponent("rbias"); componentIsNotPeriodic("rbias");
 	valueRBias=getPntrToComponent("rbias");
+	addComponent("energy"); componentIsNotPeriodic("energy");
+	valueEnergy=getPntrToComponent("energy");
 	
-	valueRct->set(rct);
+	if(is_debug)
+	{
+		addComponent("effective"); componentIsNotPeriodic("effective");
+		valueEff=getPntrToComponent("effective");
+		addComponent("rwfb"); componentIsNotPeriodic("rwfb");
+		valueRwfb=getPntrToComponent("rwfb");
+		addComponent("rct"); componentIsNotPeriodic("rct");
+		valueRct=getPntrToComponent("rct");
+		addComponent("force"); componentIsNotPeriodic("force");
+		valueForce=getPntrToComponent("force");
+		valueRwfb->set(fb0);
+		valueRct->set(rct);
+	}
 
 	log.printf("  with simulation temperature: %f\n",sim_temp);
 	log.printf("  with boltzmann constant: %f\n",kB);
@@ -761,7 +765,7 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		
 		log.printf("    with number of replica: %d\n",_nreplica);
 		log.printf("    with PESHIFT value: %f\n",peshift);
-		log.printf("    using the %d-th FB value at temperature %fK to calculate the reweight-revise factor\n",int(rctid),int_temps[rctid]);
+		log.printf("    using the linear interpolation between the %d-th (%fK) and %d-th (%fK) FB value to calculate the reweight-revise factor\n",int(rctid),int_temps[rctid],int(rctid+1),int_temps[rctid+1]);
 		if(fabs(_kB/kB-1)>1.0e-8)
 			log.printf("    with Original PESHIFT value: %f (with boltzmann constant %f)\n",
 				_peshift,_kB);
@@ -815,14 +819,14 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 				peshift_trj.c_str());
 			log.printf("\n");
 		}
-		if(is_output)
+		if(rw_output)
 		{
 			log.printf("  Writing reweighting factor to file: %s\n",rw_file.c_str());
 			log.printf("    with reweighting factor at temperature:");
 			for(unsigned i=0;i!=rw_temp.size();++i)
 				log.printf(" %f",rw_temp[i]);
 			log.printf("\n");
-			log.printf("    with frequence of reweighting factor output: %d\n",output_step);
+			log.printf("    with frequence of reweighting factor output: %d\n",rw_stride);
 		}
 		if(is_debug)
 			log.printf("  Using debug mod with output file: %s\n",debug_file.c_str());
@@ -864,6 +868,7 @@ void ITS_Bias::calculate()
 	}
 	++step;
 
+	// U = U_total + U_shift
 	shift_energy=cv_energy+peshift;
 
 	if(equiv_temp)
@@ -883,12 +888,14 @@ void ITS_Bias::calculate()
 			bgf[i]=gf[i]+std::log(betak[i]);
 		}
 		
+
 		// log{\sum_k[n_k*exp(-\beta_k*U)]}
 		gfsum=gf[0];
 		// log{\sum_k[\beta_k*n_k*exp(-\beta_k*U)]}
 		bgfsum=bgf[0];
 		for(unsigned i=1;i!=nreplica;++i)
 		{
+			//~ exp_added(gUsum,gU[i]);
 			exp_added(gfsum,gf[i]);
 			exp_added(bgfsum,bgf[i]);
 		}
@@ -912,9 +919,13 @@ void ITS_Bias::calculate()
 	if(!only_bias)
 		setOutputForce(0,bias_force);
 
+	
 	valueEnergy->set(shift_energy);
-	valueEff->set(eff_energy);
-	valueForce->set(bias_force);
+	
+	if(is_debug)
+	{
+		valueForce->set(bias_force);
+	}
 	
 	if(potdis_output)
 	{
@@ -958,18 +969,20 @@ void ITS_Bias::calculate()
 		if(bias_output&&step==0)
 			output_bias();
 
-		if(is_output && step%output_step==output_start)
+		if(rw_output && step%rw_stride==rw_start)
 		{
-			ofw.printField("time",getTimeStep()*step);
-			ofw.printField("energy",energy);
-			ofw.printField("PESHIFT",peshift);
+			ofw.fmtField(" %f");
+			ofw.printField("time",getTime());
 			for(unsigned i=0;i!=rw_factor.size();++i)
 			{
 				std::string tt;
-				Tools::convert(i,tt);
-				tt="rw_factor_"+tt;
-				rw_factor[i]=reweight(rw_beta[i]);
-				ofw.printField(tt,rw_factor[i]);
+				Tools::convert(rw_temp[i],tt);
+				rw_factor[i]=calc_bias(rw_beta[i]);
+				//~ std::string tt1="BIAS_T"+tt;
+				//~ ofw.printField(tt1,rw_factor[i]);
+				double rwrct=-(find_rw_fb(rw_rctid[i],rw_dtl[i],rw_dth[i])+std::log(double(nreplica)))/rw_beta[i];
+				std::string tt2="RBIAS_T"+tt;
+				ofw.printField(tt2,rw_factor[i]-rwrct);
 			}
 			ofw.printField();
 			ofw.flush();
@@ -1052,9 +1065,15 @@ void ITS_Bias::calculate()
 				fb_variational();
 			else
 				fb_iteration();
-				
-			rct=(-fb[rctid]-std::log(double(nreplica)))/beta0;
-			valueRct->set(rct);
+			
+			fb0=find_rw_fb(rctid,sim_dtl,sim_dth);
+			rct=-(fb0+std::log(double(nreplica)))/beta0;
+			
+			if(is_debug)
+			{
+				valueRwfb->set(fb0);
+				valueRct->set(rct);
+			}
 				
 			if(is_debug)
 				odebug.flush();
@@ -1205,6 +1224,8 @@ void ITS_Bias::fb_iteration()
 
 	// As in the paper m_k=n_{k+1}/n_k
 	// So here weights[k]=log[n_k]=log{1/pratio[k]}=-log{pratio[k]}
+	
+	//~ double rescalefb=std::log(double(nreplica))+fb[rctid]-betak[rctid]*peshift;
 	
 	bool is_nan=false;
 	for(unsigned i=0;i!=nreplica;++i)
@@ -1477,6 +1498,51 @@ void ITS_Bias::output_fb()
 		output_bias();
 }
 
+unsigned ITS_Bias::find_rw_id(double rwtemp,double& dtl,double& dth)
+{
+	if(rwtemp<templ)
+		plumed_merror("the reweight temperature is lower than the minimal temperature of ITS");
+	if(rwtemp>temph)
+		plumed_merror("the reweight temperature is larger than the maximal temperature of ITS");
+	
+	unsigned rwid=0;
+	for(unsigned i=0;i!=nreplica-1;++i)
+	{
+		dtl=rwtemp-int_temps[i];
+		dth=int_temps[i+1]-rwtemp;
+		if(dtl>=0&&dth>=0)
+		{
+			rwid=i;
+			break;
+		}
+	}
+	if(rwid+1==nreplica)
+		plumed_merror("Can't find the fb value responds to the reweight temperature");
+	
+	return rwid;
+}
+
+double ITS_Bias::find_rw_fb(unsigned rwid,double dtl,double dth)
+{
+	double fbl=fb[rwid];
+	double fbh=fb[rwid+1];
+	double dfb=fbh-fbl;
+	
+	double rwfb;
+	if(dtl<dth)
+		rwfb=fbl+dfb*dtl/(dtl+dth);
+	else
+		rwfb=fbh-dfb*dth/(dtl+dth);
+	return rwfb;
+}
+
+double ITS_Bias::find_rw_fb(double rwtemp)
+{
+	double dtl,dth;
+	unsigned rwid=find_rw_id(rwtemp,dtl,dth);
+	return find_rw_fb(rwid,dtl,dth);
+}
+
 void ITS_Bias::setupOFile(std::string& file_name, OFile& ofile, const bool multi_sim_single_files)
 {
     ofile.link(*this);
@@ -1557,8 +1623,10 @@ unsigned ITS_Bias::read_fb_file(const std::string& fname,double& _kB,double& _pe
 			_ntemp=int_ntemp;
 		}
 		
-		int_ratios.resize(_ntemp);
-		int_temps.resize(_ntemp);
+		if(is_set_ratios)
+			int_ratios.resize(_ntemp);
+		else
+			int_temps.resize(_ntemp);
 		fb.resize(_ntemp);
 
 		if(ifb)
@@ -1724,16 +1792,6 @@ unsigned ITS_Bias::read_fb_file(const std::string& fname,double& _kB,double& _pe
 	}
 	ifb.close();
 	return read_count;
-}
-
-double ITS_Bias::reweight(double rw_beta,double energy)
-{
-	energy+=peshift;
-	double factor=0;
-	for(unsigned i=0;i!=nreplica;++i)
-		factor+=exp(fb[i]+(rw_beta-betak[i])*energy);
-	factor=1.0/factor;
-	return factor;
 }
 
 void ITS_Bias::change_peshift(double new_shift)
