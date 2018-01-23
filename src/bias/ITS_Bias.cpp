@@ -492,7 +492,7 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	//~ if(peshift_trj.size()>0)
 		//~ peshift_output=true;
 	
-	if(getRestart()&&!read_fb)
+	if(getRestart())
 	{
 		read_count=read_fb_file(fb_file,_kB,_peshift);
 		if(read_count==0)
@@ -501,7 +501,6 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		if(use_mw && comm.Get_rank()==0)
 			multi_sim_comm.Barrier();
 	}
-	
 	
 	betak.resize(nreplica);
 	if(is_set_ratios)
@@ -515,6 +514,9 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		}
 		else
 			betak[i]=1.0/(kB*int_temps[i]);
+			
+		if(!read_fb&&!getRestart())
+			fb.push_back(-exp(fb_init*(betak[0]-betak[i])));
 	}
 	
 	rctid=find_rw_id(sim_temp,sim_dtl,sim_dth);
@@ -887,7 +889,6 @@ void ITS_Bias::calculate()
 			// log[\beta_k*n_k*exp(-\beta_k*U)]
 			bgf[i]=gf[i]+std::log(betak[i]);
 		}
-		
 
 		// log{\sum_k[n_k*exp(-\beta_k*U)]}
 		gfsum=gf[0];
