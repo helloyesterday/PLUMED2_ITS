@@ -439,7 +439,6 @@ ITS_Bias_Test::ITS_Bias_Test(const ActionOptions& ao):
 		mcycle=start_cycle;
 		++start_cycle;
 	}
-	
 
 	target_temp=sim_temp;
 	parse("TARGET_TEMP",target_temp);
@@ -472,8 +471,7 @@ ITS_Bias_Test::ITS_Bias_Test(const ActionOptions& ao):
 	
 	if(!read_norm)
 		norml.assign(nreplica,0);
-		
-
+	
 	gU.assign(nreplica,0);
 	gf.assign(nreplica,0);
 	bgf.assign(nreplica,0);
@@ -529,7 +527,7 @@ ITS_Bias_Test::ITS_Bias_Test(const ActionOptions& ao):
 			fb.push_back(fb_init*(int_temps[i]-int_temps[0]));
 		}
 	}
-	
+		
 	rctid=find_rw_id(sim_temp,sim_dtl,sim_dth);
 	fb0=find_rw_fb(rctid,sim_dtl,sim_dth);
 	rct=-(fb0+std::log(double(nreplica)))/beta0;
@@ -1649,12 +1647,10 @@ unsigned ITS_Bias_Test::read_fb_file(const std::string& fname,double& _kB,double
 			_ntemp=int_ntemp;
 		}
 		
-		if(is_set_ratios)
-			int_ratios.resize(_ntemp);
-		else
-			int_temps.resize(_ntemp);
+		int_ratios.resize(_ntemp);
+		int_temps.resize(_ntemp);
 		fb.resize(_ntemp);
-
+		
 		if(ifb)
 		{
 			if(!ifb.FieldExist("fb_value"))
@@ -1725,7 +1721,6 @@ unsigned ITS_Bias_Test::read_fb_file(const std::string& fname,double& _kB,double
 				int_temps[i]=tmpt;
 				int_ratios[i]=sim_temp/tmpt;
 			}
-			
 			if(is_ves)
 			{
 				if(read_iter)
@@ -1754,6 +1749,7 @@ unsigned ITS_Bias_Test::read_fb_file(const std::string& fname,double& _kB,double
 				norml[i]=tmpnb;
 			}
 			fb[i]=tmpfb;
+			
 			ifb.scanField();
 		}
 		++read_count;
