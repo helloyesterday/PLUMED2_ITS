@@ -1195,7 +1195,7 @@ void ITS_Bias::fb_iteration()
 			norml[i]=(rbfb[i]+rbfb[i+1])*rb_fac1;
 			// m_k(0)=n_k(0)/n_{k+1}(0)
 			double ratio_old=fb[i]-fb[i+1];
-			// m_k(1)=m_k(0)*p_k(0)/p_{k+1}(0)
+			// m_k(1)={m'}_k(1)=m_k(0)*p_k(0)/p_{k+1}(0)
 			ratio.push_back(ratio_old+rbfb[i+1]-rbfb[i]);
 		}
 	}
@@ -1209,10 +1209,8 @@ void ITS_Bias::fb_iteration()
 			double rb=(rbfb[i]+rbfb[i+1])*rb_fac1+(mcycle-1)*rb_fac2;
 			// ratio_old=log[m_k(t-1)], m_k=n_k/n_{k+1}
 			// (Notice that m_k in the paper equal to n_{k+1}/n_k)
-			// m_k={m'}_k/exp(\beta_k-\beta_{k+1})*E_shift
-			// peshift_ratio[i]: s(k)=exp[(\beta_k-\beta_{k+1})*E_shift]
 			double ratio_old=fb[i]-fb[i+1]-peshift_ratio[i];
-			// ratio_new=log[m_k(t)]=log[m_k(t-1)*p_{k+1}/p_{k}], if p_{k+1}/p_{k}=1, m_k(t)=m_k(t-1)
+			// ratio_new=log[{m'}_k(t)]=log[m_k(t-1)*p_{k+1}/p_{k}], if p_{k+1}/p_{k}=1, m_k(t)=m_k(t-1)
 			double ratio_new=ratio_old+rbfb[i+1]-rbfb[i];
 
 			// normal=log[W_k(t)], normalold=log[W_k(t-1)]
@@ -1231,11 +1229,7 @@ void ITS_Bias::fb_iteration()
 				rationorm=exp_add(normlold,weight);
 
 			// m_k(t)=[m_k(t-1)*c_bias*f(p_k,p_{k+1};t)*p_k(t)/p_{k+1}(t)+m_k(t-1)*W_k(t-1)]/Wr_k(t)
-			// m_k(t)=[m_k(t-1)*w_k(t)+m_k(t-1)*W_k(t-1)]/Wr_k(t)
-			// (Notice that the formula in the paper the is WRONG:
-			// (WRONG!!!) m_k(t)=[c_bias*f(p_k,p_{k+1};t)*p_k(t)/p_{k+1}(t)+m_k(t-1)*W_k(t-1)]/Wr_k(t) (WRONG!!!)
-			// which misses one of the terms m_k(t-1) at the summation)
-			// {m'}_k(t)=m_k(t)*exp(\beta_k-\beta_{k+1})*E_shift
+			// m_k(t)=[{m'}_k(t)*w_k(t)+m_k(t-1)*W_k(t-1)]/Wr_k(t)
 			ratio.push_back(exp_add(weight+ratio_new,normlold+ratio_old)-rationorm+peshift_ratio[i]);
 		}
 	}
