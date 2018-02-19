@@ -136,8 +136,8 @@ void ITS_Bias::registerKeywords(Keywords& keys)
 	Bias::registerKeywords(keys);
 	keys.addOutputComponent("rbias","default","the revised bias potential using rct");
 	keys.addOutputComponent("energy","default","the instantaneous value of the potential energy of the system");
+	keys.addOutputComponent("rct","default","the reweighting revise factor");
 	keys.addOutputComponent("effective","DEBUG_FILE","the instantaneous value of the effective potential");
-	keys.addOutputComponent("rct","DEBUG_FILE","the reweighting revise factor");
 	keys.addOutputComponent("force","DEBUG_FILE","the instantaneous value of the bias force");
 	keys.addOutputComponent("rwfb","DEBUG_FILE","the revised bias potential using rct");
 	ActionWithValue::useCustomisableComponents(keys);
@@ -164,7 +164,7 @@ void ITS_Bias::registerKeywords(Keywords& keys)
 	keys.addFlag("VARIATIONAL",false,"use variational approach to iterate the fb value");
 	keys.addFlag("ONLY_FIRST_ORDER",false,"only to calculate the first order of Omega (gradient) in variational approach");
 	keys.addFlag("TEMP_CONTRIBUTE",false,"use the contribution of each temperatue to calculate the derivatives instead of the target distribution");
-	keys.addFlag("USE_FIXED_PESHIFT",false,"use the fixed PESHIFT value and do not update it automatically during the iteration of FB value");
+	keys.addFlag("PESHIFT_AUTO_ADJUST",false,"automatically adjust the PESHIFT value during the fb iteration");
 	keys.addFlag("UNLINEAR_REPLICAS",false,"to setup the segments of temperature be propotional to the temperatues. If you setup the REPLICA_RATIO_MIN value, this term will be automatically opened.");
 	keys.addFlag("DIRECT_AVERAGE",false,"to directly calculate the average of rbfb value in each step (only be used in traditional iteration process)");
 
@@ -281,11 +281,13 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	parseFlag("EQUIVALENT_TEMPERATURE",equiv_temp);
 	parseFlag("MULTIPLE_WALKERS",use_mw);
 	parseFlag("ONLY_FIRST_ORDER",only_1st);
-	parseFlag("USE_FIXED_PESHIFT",use_fixed_peshift);
+	parseFlag("PESHIFT_AUTO_ADJUST",auto_peshift);
 	parseFlag("UNLINEAR_REPLICAS",is_unlinear);
 	parseFlag("DIRECT_AVERAGE",is_direct);
 	parse("PESHIFT",peshift);
 	parse("FB_READ_FILE",fb_input);
+	fb_file="fb.data";
+	parse("FB_FILE",fb_file);
 	
 	if(only_bias&&equiv_temp)
 		plumed_merror("EQUIVALENT_TEMPERATURE must be used with the potential energy as the argument");
@@ -350,6 +352,15 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	{
 		read_fb=true;
 		read_count=read_fb_file(fb_input,_kB,_peshift);
+		if(read_count==0)
+			plumed_merror("do not read anything in the file "+fb_input);
+		comm.Barrier();
+		if(use_mw && comm.Get_rank()==0)
+			multi_sim_comm.Barrier();
+	}
+	else if(getRestart())
+	{
+		read_count=read_fb_file(fb_file,_kB,_peshift);
 		if(read_count==0)
 			plumed_merror("do not read anything in the file "+fb_file);
 		comm.Barrier();
@@ -460,18 +471,17 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	
 	if(!read_norm)
 		norml.assign(nreplica,0);
-
+	
 	gU.assign(nreplica,0);
 	gf.assign(nreplica,0);
 	bgf.assign(nreplica,0);
 	rbfb.assign(nreplica,0);
+	peshift_ratio.assign(nreplica,0);
 
 	parse("PACE",update_step);
 	if(update_step==0)
 		plumed_merror("PACE cannot be 0");
-		
-	fb_file="fb.data";
-	parse("FB_FILE",fb_file);
+
 	parse("FB_STRIDE",fb_stride);
 
 	parse("FBTRAJ_FILE",fb_trj);
@@ -492,16 +502,6 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	//~ if(peshift_trj.size()>0)
 		//~ peshift_output=true;
 	
-	if(getRestart())
-	{
-		read_count=read_fb_file(fb_file,_kB,_peshift);
-		if(read_count==0)
-			plumed_merror("do not read anything in the file "+fb_file);
-		comm.Barrier();
-		if(use_mw && comm.Get_rank()==0)
-			multi_sim_comm.Barrier();
-	}
-	
 	betak.resize(nreplica);
 	if(is_set_ratios)
 		int_temps.resize(nreplica);
@@ -514,11 +514,20 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		}
 		else
 			betak[i]=1.0/(kB*int_temps[i]);
-			
-		if(!read_fb&&!getRestart())
-			fb.push_back(-exp(fb_init*(betak[0]-betak[i])));
 	}
 	
+	// s(k)=exp(\beta_k*E_shift)/exp(\beta_{k+1}*E_shift)
+	// s(k)=exp[(\beta_k-\beta_{k+1})*E_shift]
+	set_peshift_ratio();
+	if(!read_fb&&!getRestart())
+	{
+		for(unsigned i=0;i!=nreplica;++i)
+		{
+			//~ fb.push_back(-exp(fb_init*(betak[0]-betak[i])));
+			fb.push_back(fb_init*(int_temps[i]-int_temps[0]));
+		}
+	}
+		
 	rctid=find_rw_id(sim_temp,sim_dtl,sim_dth);
 	fb0=find_rw_fb(rctid,sim_dtl,sim_dth);
 	rct=-(fb0+std::log(double(nreplica)))/beta0;
@@ -692,6 +701,9 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	valueRBias=getPntrToComponent("rbias");
 	addComponent("energy"); componentIsNotPeriodic("energy");
 	valueEnergy=getPntrToComponent("energy");
+	addComponent("rct"); componentIsNotPeriodic("rct");
+	valueRct=getPntrToComponent("rct");
+	valueRct->set(rct);
 	
 	if(is_debug)
 	{
@@ -699,12 +711,9 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		valueEff=getPntrToComponent("effective");
 		addComponent("rwfb"); componentIsNotPeriodic("rwfb");
 		valueRwfb=getPntrToComponent("rwfb");
-		addComponent("rct"); componentIsNotPeriodic("rct");
-		valueRct=getPntrToComponent("rct");
 		addComponent("force"); componentIsNotPeriodic("force");
 		valueForce=getPntrToComponent("force");
 		valueRwfb->set(fb0);
-		valueRct->set(rct);
 	}
 
 	log.printf("  with simulation temperature: %f\n",sim_temp);
@@ -870,7 +879,7 @@ void ITS_Bias::calculate()
 	}
 	++step;
 
-	// U = U_total + U_shift
+	// U = U_total + E_shift
 	shift_energy=cv_energy+peshift;
 
 	if(equiv_temp)
@@ -1059,7 +1068,7 @@ void ITS_Bias::calculate()
 			//~ comm.Sum(rbfb);
 			if(use_mw)
 				mw_merge_rbfb();
-			if(!use_fixed_peshift&&-1.0*min_ener>peshift)
+			if(auto_peshift&&-1.0*min_ener>peshift)
 				change_peshift(-1.0*min_ener);
 
 			if(is_ves)
@@ -1069,11 +1078,11 @@ void ITS_Bias::calculate()
 			
 			fb0=find_rw_fb(rctid,sim_dtl,sim_dth);
 			rct=-(fb0+std::log(double(nreplica)))/beta0;
+			valueRct->set(rct);
 			
 			if(is_debug)
 			{
 				valueRwfb->set(fb0);
-				valueRct->set(rct);
 			}
 				
 			if(is_debug)
@@ -1184,8 +1193,10 @@ void ITS_Bias::fb_iteration()
 		for(unsigned i=0;i!=nreplica-1;++i)
 		{
 			norml[i]=(rbfb[i]+rbfb[i+1])*rb_fac1;
-			// m_k(0)=p_k(0)/p_{k+1}(0)
-			ratio.push_back(rbfb[i+1]-rbfb[i]);
+			// m_k(0)=n_k(0)/n_{k+1}(0)
+			double ratio_old=fb[i]-fb[i+1];
+			// m_k(1)=m_k(0)*p_k(0)/p_{k+1}(0)
+			ratio.push_back(ratio_old+rbfb[i+1]-rbfb[i]);
 		}
 	}
 	else
@@ -1197,23 +1208,35 @@ void ITS_Bias::fb_iteration()
 			// (default f(p_k,p_{k+1};t)=\sqrt[p_k(t)*p_{k+1}(t)])
 			double rb=(rbfb[i]+rbfb[i+1])*rb_fac1+(mcycle-1)*rb_fac2;
 			// ratio_old=log[m_k(t-1)], m_k=n_k/n_{k+1}
-			// (Notice that in the paper m_k=n_{k+1}/n_k)
-			double ratio_old=fb[i]-fb[i+1];
-			
+			// (Notice that m_k in the paper equal to n_{k+1}/n_k)
+			// m_k={m'}_k/exp(\beta_k-\beta_{k+1})*E_shift
+			// peshift_ratio[i]: s(k)=exp[(\beta_k-\beta_{k+1})*E_shift]
+			double ratio_old=fb[i]-fb[i+1]-peshift_ratio[i];
+			// ratio_new=log[m_k(t)]=log[m_k(t-1)*p_{k+1}/p_{k}], if p_{k+1}/p_{k}=1, m_k(t)=m_k(t-1)
+			double ratio_new=ratio_old+rbfb[i+1]-rbfb[i];
+
 			// normal=log[W_k(t)], normalold=log[W_k(t-1)]
 			// W_k(t)=\sum_t[f(p_k,p_{k+1})]=W_k(t-1)+f(p_k,p_{k+1};t)
 			// the summation record the data of ALL the update steps
 			double normlold=norml[i];
 			exp_added(norml[i],rb);
-			
+
 			// Rescaled normalization factor
 			double rationorm=norml[i];
-			// Wr_k(t)=W_k(t-1)+c_bias*f(p_k,p_{k+1};t)
+			// the weight of new ratio
+			// w_k(t)=c_bias*f(p_k,p_{k+1};t)
+			double weight=fb_bias+rb;
+			// Wr_k(t)=W_k(t-1)+w_k(t)
 			if(is_norm_rescale)
-				rationorm=exp_add(normlold,rb+fb_bias);
-				
-			// m_k(t)=[c_bias*f(p_k,p_{k+1};t)*p_k(t)/p_{k+1}(t)+m_k(t-1)*W_k(t-1)]/Wr_k(t)
-			ratio.push_back(exp_add(fb_bias+rb+rbfb[i+1]-rbfb[i],normlold+ratio_old)-rationorm);
+				rationorm=exp_add(normlold,weight);
+
+			// m_k(t)=[m_k(t-1)*c_bias*f(p_k,p_{k+1};t)*p_k(t)/p_{k+1}(t)+m_k(t-1)*W_k(t-1)]/Wr_k(t)
+			// m_k(t)=[m_k(t-1)*w_k(t)+m_k(t-1)*W_k(t-1)]/Wr_k(t)
+			// (Notice that the formula in the paper the is WRONG:
+			// (WRONG!!!) m_k(t)=[c_bias*f(p_k,p_{k+1};t)*p_k(t)/p_{k+1}(t)+m_k(t-1)*W_k(t-1)]/Wr_k(t) (WRONG!!!)
+			// which misses one of the terms m_k(t-1) at the summation)
+			// {m'}_k(t)=m_k(t)*exp(\beta_k-\beta_{k+1})*E_shift
+			ratio.push_back(exp_add(weight+ratio_new,normlold+ratio_old)-rationorm+peshift_ratio[i]);
 		}
 	}
 
@@ -1227,7 +1250,7 @@ void ITS_Bias::fb_iteration()
 	// So here weights[k]=log[n_k]=log{1/pratio[k]}=-log{pratio[k]}
 	
 	//~ double rescalefb=std::log(double(nreplica))+fb[rctid]-betak[rctid]*peshift;
-	
+
 	bool is_nan=false;
 	for(unsigned i=0;i!=nreplica;++i)
 	{
@@ -1242,7 +1265,7 @@ void ITS_Bias::fb_iteration()
 			odebug.link(*this);
 			odebug.open("error.data");
 		}
-		
+
 		odebug.printf("--- FB update ---\n");
 		for(unsigned i=0;i!=nreplica;++i)
 		{
@@ -1624,12 +1647,10 @@ unsigned ITS_Bias::read_fb_file(const std::string& fname,double& _kB,double& _pe
 			_ntemp=int_ntemp;
 		}
 		
-		if(is_set_ratios)
-			int_ratios.resize(_ntemp);
-		else
-			int_temps.resize(_ntemp);
+		int_ratios.resize(_ntemp);
+		int_temps.resize(_ntemp);
 		fb.resize(_ntemp);
-
+		
 		if(ifb)
 		{
 			if(!ifb.FieldExist("fb_value"))
@@ -1700,7 +1721,6 @@ unsigned ITS_Bias::read_fb_file(const std::string& fname,double& _kB,double& _pe
 				int_temps[i]=tmpt;
 				int_ratios[i]=sim_temp/tmpt;
 			}
-			
 			if(is_ves)
 			{
 				if(read_iter)
@@ -1729,6 +1749,7 @@ unsigned ITS_Bias::read_fb_file(const std::string& fname,double& _kB,double& _pe
 				norml[i]=tmpnb;
 			}
 			fb[i]=tmpfb;
+			
 			ifb.scanField();
 		}
 		++read_count;
@@ -1801,6 +1822,13 @@ void ITS_Bias::change_peshift(double new_shift)
 	if(is_ves)
 		iter_rescale(new_shift-peshift);
 	peshift=new_shift;
+	set_peshift_ratio();
+}
+
+void ITS_Bias::set_peshift_ratio()
+{
+	for(unsigned i=0;i!=nreplica-1;++i)
+		peshift_ratio[i]=(betak[i]-betak[i+1])*peshift;
 }
 
 void ITS_Bias::output_bias()

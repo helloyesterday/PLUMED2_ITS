@@ -105,6 +105,7 @@ private:
 	std::vector<double> bias_record;
 	std::vector<double> force_record;
 	std::vector<double> bias_ratio;
+	std::vector<double> peshift_ratio;
 
 	// The average of 1st order drivative of bias potential in target distribution
 	std::vector<double> deriv_ps;
@@ -138,7 +139,7 @@ private:
 	bool potdis_output;
 	bool bias_linked;
 	bool only_bias;
-	bool use_fixed_peshift;
+	bool auto_peshift;
 	bool is_unlinear;
 	bool is_set_temps;
 	bool is_set_ratios;
@@ -233,6 +234,7 @@ private:
 	inline void fb_rescale(double shift){coe_rescale(shift,fb);}
 	inline void iter_rescale(double shift){coe_rescale(shift,fb_iter);}
 	void change_peshift(double new_shift);
+	void set_peshift_ratio();
 
 	std::vector<double> omega2_alpha(
 		const std::vector<std::vector<double> >& hessian,
