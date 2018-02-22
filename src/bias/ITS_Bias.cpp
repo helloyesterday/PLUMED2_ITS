@@ -154,8 +154,8 @@ void ITS_Bias::registerKeywords(Keywords& keys)
 	keys.add("optional","SIM_TEMP","the temperature used in the simulation");
 	keys.add("optional","TEMP_MIN","the lower bounds of the temperatures");
 	keys.add("optional","TEMP_MAX","the upper bounds of the temperatures");
-	keys.add("optional","REPLICA_RATIO_MIN","the minimal ratio of bias ratio when using IBS method");
-	keys.add("optional","REPLICA_RATIO_MAX","the maximal ratio of bias ratio when using IBS method");
+	keys.add("optional","RATIO_MIN","the minimal ratio of temperature");
+	keys.add("optional","RATIO_MAX","the maximal ratio of temperature");
 	keys.add("optional","TARGET_TEMP","the temperature that the system distribution at");
 	
 	keys.addFlag("EQUIVALENT_TEMPERATURE",false,"to simulate the system at target temperatue but keep using the original thermal bath");
@@ -301,8 +301,8 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	parse("TEMP_MAX",_temph);
 	if(_templ>0&&_temph>0)
 		is_set_temps=true;
-	parse("REPLICA_RATIO_MIN",_ratiol);
-	parse("REPLICA_RATIO_MAX",_ratioh);
+	parse("RATIO_MIN",_ratiol);
+	parse("RATIO_MAX",_ratioh);
 	
 	if(_ratiol>0||_ratioh>0)
 	{
@@ -385,8 +385,8 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 			if(ratiol>=ratioh)
 				plumed_merror("the value of RATIO_BIAS_MAX must be large than RATIO_BIAS_MIN");
 				
-			templ=sim_temp/ratioh;
-			temph=sim_temp/ratiol;
+			templ=sim_temp*ratiol;
+			temph=sim_temp*ratioh;
 			
 			if(!is_unlinear)
 			{
@@ -395,7 +395,7 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 				{
 					double ratio_now=ratiol+i*dr;
 					int_ratios.push_back(ratio_now);
-					int_temps.push_back(sim_temp/ratio_now);
+					int_temps.push_back(sim_temp*ratio_now);
 				}
 			}
 		}
@@ -411,8 +411,8 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 			if(templ>=temph)
 				plumed_merror("the value of TEMP_MAX must be large than TEMP_MIN");
 				
-			ratiol=sim_temp/temph;
-			ratioh=sim_temp/templ;
+			ratiol=templ/sim_temp;
+			ratioh=temph/sim_temp;
 			
 			if(!is_unlinear)
 			{
@@ -421,7 +421,7 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 				{
 					double temp_now=templ+i*dt;
 					int_temps.push_back(temp_now);
-					int_ratios.push_back(sim_temp/temp_now);
+					int_ratios.push_back(temp_now/sim_temp);
 				}
 			}
 		}
@@ -432,13 +432,15 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 			{
 				double temp_now=templ*pow(temp_ratio,i);
 				int_temps.push_back(temp_now);
-				int_ratios.push_back(sim_temp/temp_now);
+				int_ratios.push_back(temp_now/sim_temp);
 			}
 		}
 		
 		mcycle=start_cycle;
 		++start_cycle;
 	}
+	for(unsigned i=0;i!=nreplica;++i)
+		betak.push_back(1.0/(kB*int_temps[i]));
 
 	target_temp=sim_temp;
 	parse("TARGET_TEMP",target_temp);
@@ -468,6 +470,8 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		is_norm_rescale=true;
 		fb_bias=std::log(step_size);
 	}
+	
+	logN=std::log(double(nreplica));
 	
 	if(!read_norm)
 		norml.assign(nreplica,0);
@@ -502,19 +506,7 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	//~ if(peshift_trj.size()>0)
 		//~ peshift_output=true;
 	
-	betak.resize(nreplica);
-	if(is_set_ratios)
-		int_temps.resize(nreplica);
-	for(unsigned i=0;i!=nreplica;++i)
-	{
-		if(is_set_ratios)
-		{
-			betak[i]=beta0*int_ratios[i];
-			int_temps[i]=sim_temp/int_ratios[i];
-		}
-		else
-			betak[i]=1.0/(kB*int_temps[i]);
-	}
+
 	
 	// s(k)=exp(\beta_k*E_shift)/exp(\beta_{k+1}*E_shift)
 	// s(k)=exp[(\beta_k-\beta_{k+1})*E_shift]
@@ -527,10 +519,6 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 			fb.push_back(fb_init*(int_temps[i]-int_temps[0]));
 		}
 	}
-		
-	rctid=find_rw_id(sim_temp,sim_dtl,sim_dth);
-	fb0=find_rw_fb(rctid,sim_dtl,sim_dth);
-	rct=-(fb0+std::log(double(nreplica)))/beta0;
 
 	if(!equiv_temp&&!is_const)
 	{
@@ -639,6 +627,10 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 			}
 		}
 	}
+	
+	rctid=find_rw_id(sim_temp,sim_dtl,sim_dth);
+	fb0=find_rw_fb(rctid,sim_dtl,sim_dth);
+	rct=calc_rct(beta0,fb0);
 
 	parseVector("RW_TEMP",rw_temp);
 	parse("RW_FILE",rw_file);
@@ -648,12 +640,13 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	if(rw_file.size()==0&&rw_temp.size()>0)
 		plumed_merror("RW_TEMP is setted but RW_FILE is not setted");
 
+	std::vector<double> rw_fb(rw_temp.size());
 	if(rw_file.size()>0)
 	{
-		//~ parseFlag("REVISED_REWEIGHT",is_rw_rct);
 		rw_output=true;
 		if(rw_temp.size()>0)
 		{
+			rw_rct.resize(rw_temp.size());
 			rw_rctid.resize(rw_temp.size());
 			rw_dth.resize(rw_temp.size());
 			rw_dtl.resize(rw_temp.size());
@@ -664,6 +657,8 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 				else
 					plumed_merror("the reweighting temperature must between TEMP_MIN and TEMP_MAX");
 				rw_rctid[i]=find_rw_id(rw_temp[i],rw_dtl[i],rw_dth[i]);
+				rw_fb[i]=find_rw_fb(rw_rctid[i],rw_dtl[i],rw_dth[i]);
+				rw_rct[i]=calc_rct(rw_beta[i],rw_fb[i]);
 			}
 		}
 		else
@@ -672,7 +667,7 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		}
 		rw_factor.resize(rw_temp.size());
 
-		setupOFile(rw_file,ofw,use_mw);
+		setupOFile(rw_file,ofw,false);
 		for(unsigned i=0;i!=rw_temp.size();++i)
 		{
 			std::string tt;
@@ -761,13 +756,13 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 
 		if(read_norm)
 		{
-			log.printf("  with temperatue and FB value: (index temperature replica_ratio beta_k fb norml)\n");
+			log.printf("  with temperatue and FB value: (index T_k gamma_k beta_k fb norml)\n");
 			for(unsigned i=0;i!=nreplica;++i)
 				log.printf("    %d\t%f\t%f\t%f\t%f\t%f\n",i,int_temps[i],int_ratios[i],betak[i],fb[i],norml[i]);
 		}
 		else
 		{
-			log.printf("  with temperatue and FB value: (index temperature replica_ratio beta_k fb)\n");
+			log.printf("  with temperatue and FB value: (index[k] T_k gamma_k beta_k fb_k)\n");
 			for(unsigned i=0;i!=nreplica;++i)
 				log.printf("    %d\t%f\t%f\t%f\t%f\n",i,int_temps[i],int_ratios[i],betak[i],fb[i]);
 		}
@@ -776,7 +771,8 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		
 		log.printf("    with number of replica: %d\n",_nreplica);
 		log.printf("    with PESHIFT value: %f\n",peshift);
-		log.printf("    using the linear interpolation between the %d-th (%fK) and %d-th (%fK) FB value to calculate the reweight-revise factor\n",int(rctid),int_temps[rctid],int(rctid+1),int_temps[rctid+1]);
+		log.printf("    using the linear interpolation between the fb values of %d-th (%fK) and %d-th (%fK)\n",int(rctid),int_temps[rctid],int(rctid+1),int_temps[rctid+1]);
+		log.printf("    with the parameter %f and %f\n",sim_dtl,sim_dth);
 		if(fabs(_kB/kB-1)>1.0e-8)
 			log.printf("    with Original PESHIFT value: %f (with boltzmann constant %f)\n",
 				_peshift,_kB);
@@ -833,10 +829,9 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		if(rw_output)
 		{
 			log.printf("  Writing reweighting factor to file: %s\n",rw_file.c_str());
-			log.printf("    with reweighting factor at temperature:");
+			log.printf("    with reweighting factor at temperature:\n");
 			for(unsigned i=0;i!=rw_temp.size();++i)
-				log.printf(" %f",rw_temp[i]);
-			log.printf("\n");
+				log.printf("    %d\t%fK(%f) fit at %d-th temperature with %f and %f\n",int(i),rw_temp[i],rw_beta[i],int(rw_rctid[i]),rw_dtl[i],rw_dth[i]);
 			log.printf("    with frequence of reweighting factor output: %d\n",rw_stride);
 		}
 		if(is_debug)
@@ -990,9 +985,9 @@ void ITS_Bias::calculate()
 				rw_factor[i]=calc_bias(rw_beta[i]);
 				//~ std::string tt1="BIAS_T"+tt;
 				//~ ofw.printField(tt1,rw_factor[i]);
-				double rwrct=-(find_rw_fb(rw_rctid[i],rw_dtl[i],rw_dth[i])+std::log(double(nreplica)))/rw_beta[i];
 				std::string tt2="RBIAS_T"+tt;
-				ofw.printField(tt2,rw_factor[i]-rwrct);
+				std::string tt3="RCT_T"+tt;
+				ofw.printField(tt2,rw_factor[i]-rw_rct[i]);
 			}
 			ofw.printField();
 			ofw.flush();
@@ -1077,8 +1072,14 @@ void ITS_Bias::calculate()
 				fb_iteration();
 			
 			fb0=find_rw_fb(rctid,sim_dtl,sim_dth);
-			rct=-(fb0+std::log(double(nreplica)))/beta0;
+			rct=calc_rct(beta0,fb0);
 			valueRct->set(rct);
+			
+			if(rw_output)
+			{
+				for(unsigned i=0;i!=rw_rct.size();++i)
+					rw_rct[i]=calc_rct(rw_beta[i],find_rw_fb(rw_rctid[i],rw_dtl[i],rw_dth[i]));
+			}
 			
 			if(is_debug)
 			{
@@ -1243,7 +1244,7 @@ void ITS_Bias::fb_iteration()
 	// As in the paper m_k=n_{k+1}/n_k
 	// So here weights[k]=log[n_k]=log{1/pratio[k]}=-log{pratio[k]}
 	
-	//~ double rescalefb=std::log(double(nreplica))+fb[rctid]-betak[rctid]*peshift;
+	//~ double rescalefb=logN+fb[rctid]-betak[rctid]*peshift;
 
 	bool is_nan=false;
 	for(unsigned i=0;i!=nreplica;++i)
@@ -1267,7 +1268,7 @@ void ITS_Bias::fb_iteration()
 			Tools::convert(i,id);
 			odebug.printField("index",id);
 			if(is_set_ratios)
-				odebug.printField("replica_ratio",int_ratios[i]);
+				odebug.printField("ratio",int_ratios[i]);
 			else
 				odebug.printField("temperature",int_temps[i]);
 			odebug.printField("betak",betak[i]);
@@ -1444,7 +1445,7 @@ void ITS_Bias::output_fb()
 			Tools::convert(i,id);
 			ofb.printField("index",id);
 			if(is_set_ratios)
-				ofb.printField("replica_ratio",int_ratios[i]);
+				ofb.printField("ratio",int_ratios[i]);
 			else
 				ofb.printField("temperature",int_temps[i]);
 			ofb.printField("fb_value",fb[i]);
@@ -1576,6 +1577,29 @@ void ITS_Bias::setupOFile(std::string& file_name, OFile& ofile, const bool multi
 		ofile.enforceSuffix("");
     }
     ofile.open(fname);
+    ofile.setHeavyFlush();
+}
+
+void ITS_Bias::setupOFiles(std::vector<std::string>& fnames, std::vector<OFile*>& OFiles, const bool multi_sim_single_files)
+{
+	OFiles.resize(fnames.size(),NULL);
+	for(unsigned i=0; i!=fnames.size();++i)
+	{
+		OFiles[i] = new OFile();
+		OFiles[i]->link(*this);
+		if(multi_sim_single_files)
+		{
+			unsigned int r=0;
+			if(comm.Get_rank()==0)
+				{r=multi_sim_comm.Get_rank();}
+			comm.Bcast(r,0);
+			if(r>0)
+				{fnames[i]="/dev/null";}
+			OFiles[i]->enforceSuffix("");
+		}
+		OFiles[i]->open(fnames[i]);
+		OFiles[i]->setHeavyFlush();
+	}
 }
 
 unsigned ITS_Bias::read_fb_file(const std::string& fname,double& _kB,double& _peshift)
@@ -1651,8 +1675,8 @@ unsigned ITS_Bias::read_fb_file(const std::string& fname,double& _kB,double& _pe
 				plumed_merror("cannot found \"fb_value\" in file \""+fb_input+"\"");
 			if(is_set_temps&&!ifb.FieldExist("temperature"))
 				plumed_merror("cannot found \"temperature\" in file \""+fb_input+"\"");
-			if(is_set_ratios&&!ifb.FieldExist("replica_ratio"))
-				plumed_merror("cannot found \"replica_ratio\" in file \""+fb_input+"\"");
+			if(is_set_ratios&&!ifb.FieldExist("ratio"))
+				plumed_merror("cannot found \"ratio\" in file \""+fb_input+"\"");
 		}
 		else
 			break;
@@ -1705,15 +1729,15 @@ unsigned ITS_Bias::read_fb_file(const std::string& fname,double& _kB,double& _pe
 			double tmpt;
 			if(is_set_ratios)
 			{
-				ifb.scanField("replica_ratio",tmpt);
+				ifb.scanField("ratio",tmpt);
 				int_ratios[i]=tmpt;
-				int_temps[i]=sim_temp/tmpt;
+				int_temps[i]=sim_temp*tmpt;
 			}
 			else
 			{
 				ifb.scanField("temperature",tmpt);
 				int_temps[i]=tmpt;
-				int_ratios[i]=sim_temp/tmpt;
+				int_ratios[i]=tmpt/sim_temp;
 			}
 			if(is_ves)
 			{
@@ -1774,8 +1798,8 @@ unsigned ITS_Bias::read_fb_file(const std::string& fname,double& _kB,double& _pe
 			if(int_ratios[i]<ratiol)
 				ratiol=int_ratios[i];
 		}
-		temph=sim_temp/ratiol;
-		templ=sim_temp/ratioh;
+		temph=sim_temp*ratiol;
+		templ=sim_temp*ratioh;
 	}
 	else
 	{
@@ -1788,8 +1812,8 @@ unsigned ITS_Bias::read_fb_file(const std::string& fname,double& _kB,double& _pe
 			if(int_temps[i]<templ)
 				templ=int_temps[i];
 		}
-		ratioh=sim_temp/templ;
-		ratiol=sim_temp/temph;
+		ratioh=templ/sim_temp;
+		ratiol=temph/sim_temp;
 	}
 	if(fabs(_kB/kB-1)>1.0e-8)
 	{

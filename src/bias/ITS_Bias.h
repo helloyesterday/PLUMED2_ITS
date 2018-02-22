@@ -94,6 +94,7 @@ private:
 	std::vector<double> rw_factor;
 	std::vector<double> rw_dth;
 	std::vector<double> rw_dtl;
+	std::vector<double> rw_rct;
 	std::vector<unsigned> rw_rctid;
 	std::vector<unsigned> pot_dis;
 	std::vector<std::string> rw_tstr;
@@ -148,7 +149,6 @@ private:
 	bool read_fb;
 	bool read_iter;
 	bool fbtrj_output;
-	bool is_rw_rct;
 	//~ bool norm_output;
 	//~ bool peshift_output;
 	unsigned update_step;
@@ -199,6 +199,7 @@ private:
 	double tot_bias;
 	double sim_dtl;
 	double sim_dth;
+	double logN;
 
 	unsigned ntarget;
 	double ener_min;
@@ -224,6 +225,7 @@ private:
 	void mw_merge_rbfb();
 	void output_bias();
 	void setupOFile(std::string& file_name, OFile& ofile, const bool multi_sim_single_files);
+	void setupOFiles(std::vector<std::string>& fnames, std::vector<OFile*>& OFiles, const bool multi_sim_single_files);
 	unsigned read_fb_file(const std::string& fname,double& _kB,double& _peshift);
 	double calc_deriv2();
 	unsigned find_rw_id(double rwtemp,double& dtl,double& dth);
@@ -247,7 +249,10 @@ public:
 	explicit ITS_Bias(const ActionOptions&);
 	~ITS_Bias();
 	void calculate();
-	double calc_bias(double _beta){return -gfsum/_beta-shift_energy;}
+	double calc_bias(double _beta) const
+		{return -gfsum/_beta-shift_energy;}
+	double calc_rct(double _beta,double _fb) const
+		{return -(_fb+logN)/_beta;}
 	static void registerKeywords(Keywords& keys);
 };
 
