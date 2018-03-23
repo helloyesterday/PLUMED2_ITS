@@ -152,8 +152,6 @@ private:
 	//~ bool norm_output;
 	//~ bool peshift_output;
 	unsigned update_step;
-	unsigned rw_stride;
-	unsigned rw_start;
 	unsigned start_cycle;
 	unsigned fb_stride;
 	unsigned fbtrj_stride;
@@ -171,7 +169,6 @@ private:
 	std::string iter_trj;
 	std::string deriv_trj;
 	std::string peshift_trj;
-	std::string rw_file;
 	std::string fb_input;
 	std::string target_file;
 	std::string bias_file;
@@ -208,13 +205,14 @@ private:
 	double dvp2_complete;
 	
 	std::vector<Bias*> bias_pntrs_;
-
+	
 	Value* valueEnergy;
 	Value* valueEff;
 	Value* valueForce;
 	Value* valueRct;
 	Value* valueRBias;
 	Value* valueRwfb;
+	std::vector<Value*> valueRwbias;
 
 	inline void update_rbfb();
 	inline void update_rbfb_direct();

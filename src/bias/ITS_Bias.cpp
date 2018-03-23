@@ -137,6 +137,7 @@ void ITS_Bias::registerKeywords(Keywords& keys)
 	keys.addOutputComponent("rbias","default","the revised bias potential using rct");
 	keys.addOutputComponent("energy","default","the instantaneous value of the potential energy of the system");
 	keys.addOutputComponent("rct","default","the reweighting revise factor");
+	//~ keys.addOutputComponent("rbias_T","RW_TEMP","the revised bias potential at different temperatures");
 	keys.addOutputComponent("effective","DEBUG_FILE","the instantaneous value of the effective potential");
 	keys.addOutputComponent("force","DEBUG_FILE","the instantaneous value of the bias force");
 	keys.addOutputComponent("rwfb","DEBUG_FILE","the revised bias potential using rct");
@@ -184,9 +185,6 @@ void ITS_Bias::registerKeywords(Keywords& keys)
 	//~ keys.add("optional","PESHIFT_TRAJ"," a file recording the evolution of peshift");
 	
 	keys.add("optional","RW_TEMP","the temperatures used in the calcaulation of reweighting factors");
-	keys.add("optional","RW_FILE","a file of the reweighting factors");
-	keys.add("optional","RW_STRIDE","the frequency of reweighting factor output");
-	keys.add("optional","RW_START","the start step of reweighting factor output");
 	//~ keys.addFlag("REVISED_REWEIGHT",false,"calculate the c(t) value at reweighting factor output file");
 	keys.add("optional","FB_READ_FILE","a file of reading fb values (include temperatures and peshift)");
 	keys.add("optional","BIAS_FILE","a file to output the function of bias potential");
@@ -220,8 +218,6 @@ ITS_Bias::~ITS_Bias()
 		//~ if(is_ves)
 			//~ oderiv.close();
 	}
-	if(rw_output)
-		ofw.close();
 	if(is_debug)
 		odebug.close();
 	if(potdis_output)
@@ -239,9 +235,8 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	rbfb_output(false),is_debug(false),potdis_output(false),
 	bias_linked(false),only_bias(false),
 	is_set_temps(false),is_set_ratios(false),is_norm_rescale(false),
-	read_fb(false),read_iter(false),fbtrj_output(false),
-	rw_stride(1),rw_start(0),start_cycle(0),fb_stride(1),
-	bias_stride(1),potdis_step(1),rctid(0),
+	read_fb(false),read_iter(false),fbtrj_output(false),start_cycle(0),
+	fb_stride(1),bias_stride(1),potdis_step(1),rctid(0),
 	min_ener(1e38),pot_bin(1),dU(1),dvp2_complete(0)
 {
 	if(getNumberOfArguments()==0)
@@ -631,49 +626,46 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	rctid=find_rw_id(sim_temp,sim_dtl,sim_dth);
 	fb0=find_rw_fb(rctid,sim_dtl,sim_dth);
 	rct=calc_rct(beta0,fb0);
+	
+	addComponent("rbias"); componentIsNotPeriodic("rbias");
+	valueRBias=getPntrToComponent("rbias");
+	addComponent("energy"); componentIsNotPeriodic("energy");
+	valueEnergy=getPntrToComponent("energy");
+	addComponent("rct"); componentIsNotPeriodic("rct");
+	valueRct=getPntrToComponent("rct");
+	valueRct->set(rct);
 
 	parseVector("RW_TEMP",rw_temp);
-	parse("RW_FILE",rw_file);
-	parse("RW_STRIDE",rw_stride);
-	parse("RW_START",rw_start);
-
-	if(rw_file.size()==0&&rw_temp.size()>0)
-		plumed_merror("RW_TEMP is setted but RW_FILE is not setted");
 
 	std::vector<double> rw_fb(rw_temp.size());
-	if(rw_file.size()>0)
+	if(rw_temp.size()>0)
 	{
 		rw_output=true;
-		if(rw_temp.size()>0)
-		{
-			rw_rct.resize(rw_temp.size());
-			rw_rctid.resize(rw_temp.size());
-			rw_dth.resize(rw_temp.size());
-			rw_dtl.resize(rw_temp.size());
-			for(unsigned i=0;i!=rw_temp.size();++i)
-			{
-				if(rw_temp[i]<=temph&&rw_temp[i]>=templ)
-					rw_beta.push_back(1.0/(kB*rw_temp[i]));
-				else
-					plumed_merror("the reweighting temperature must between TEMP_MIN and TEMP_MAX");
-				rw_rctid[i]=find_rw_id(rw_temp[i],rw_dtl[i],rw_dth[i]);
-				rw_fb[i]=find_rw_fb(rw_rctid[i],rw_dtl[i],rw_dth[i]);
-				rw_rct[i]=calc_rct(rw_beta[i],rw_fb[i]);
-			}
-		}
-		else
-		{
-			plumed_merror("RW_TEMP is not setup");
-		}
-		rw_factor.resize(rw_temp.size());
 
-		setupOFile(rw_file,ofw,false);
+		rw_rct.resize(rw_temp.size());
+		rw_rctid.resize(rw_temp.size());
+		rw_dth.resize(rw_temp.size());
+		rw_dtl.resize(rw_temp.size());
+		for(unsigned i=0;i!=rw_temp.size();++i)
+		{
+			if(rw_temp[i]<=temph&&rw_temp[i]>=templ)
+				rw_beta.push_back(1.0/(kB*rw_temp[i]));
+			else
+				plumed_merror("the reweighting temperature must between TEMP_MIN and TEMP_MAX");
+			rw_rctid[i]=find_rw_id(rw_temp[i],rw_dtl[i],rw_dth[i]);
+			rw_fb[i]=find_rw_fb(rw_rctid[i],rw_dtl[i],rw_dth[i]);
+			rw_rct[i]=calc_rct(rw_beta[i],rw_fb[i]);
+		}
+		
+		rw_factor.resize(rw_temp.size());
+		valueRwbias.resize(rw_temp.size());
 		for(unsigned i=0;i!=rw_temp.size();++i)
 		{
 			std::string tt;
-			Tools::convert(i,tt);
-			tt="rw_temperature_"+tt;
-			ofw.addConstantField(tt).printField(tt,rw_temp[i]);
+			Tools::convert(rw_temp[i],tt);
+			std::string rtt="rbias_T"+tt;
+			addComponent(rtt); componentIsNotPeriodic(rtt);
+			valueRwbias[i]=getPntrToComponent(rtt);
 		}
 	}
 
@@ -689,16 +681,6 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		odebug.addConstantField("STEP_SIZE");
 		odebug.addConstantField("PESHIFT");
 	}
-
-	checkRead();
-
-	addComponent("rbias"); componentIsNotPeriodic("rbias");
-	valueRBias=getPntrToComponent("rbias");
-	addComponent("energy"); componentIsNotPeriodic("energy");
-	valueEnergy=getPntrToComponent("energy");
-	addComponent("rct"); componentIsNotPeriodic("rct");
-	valueRct=getPntrToComponent("rct");
-	valueRct->set(rct);
 	
 	if(is_debug)
 	{
@@ -710,6 +692,8 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		valueForce=getPntrToComponent("force");
 		valueRwfb->set(fb0);
 	}
+
+	checkRead();
 
 	log.printf("  with simulation temperature: %f\n",sim_temp);
 	log.printf("  with boltzmann constant: %f\n",kB);
@@ -828,11 +812,9 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		}
 		if(rw_output)
 		{
-			log.printf("  Writing reweighting factor to file: %s\n",rw_file.c_str());
 			log.printf("    with reweighting factor at temperature:\n");
 			for(unsigned i=0;i!=rw_temp.size();++i)
 				log.printf("    %d\t%fK(%f) fit at %d-th temperature with %f and %f\n",int(i),rw_temp[i],rw_beta[i],int(rw_rctid[i]),rw_dtl[i],rw_dth[i]);
-			log.printf("    with frequence of reweighting factor output: %d\n",rw_stride);
 		}
 		if(is_debug)
 			log.printf("  Using debug mod with output file: %s\n",debug_file.c_str());
@@ -974,23 +956,14 @@ void ITS_Bias::calculate()
 		if(bias_output&&step==0)
 			output_bias();
 
-		if(rw_output && step%rw_stride==rw_start)
+		if(rw_output)
 		{
-			ofw.fmtField(" %f");
-			ofw.printField("time",getTime());
 			for(unsigned i=0;i!=rw_factor.size();++i)
 			{
-				std::string tt;
-				Tools::convert(rw_temp[i],tt);
+
 				rw_factor[i]=calc_bias(rw_beta[i]);
-				//~ std::string tt1="BIAS_T"+tt;
-				//~ ofw.printField(tt1,rw_factor[i]);
-				std::string tt2="RBIAS_T"+tt;
-				std::string tt3="RCT_T"+tt;
-				ofw.printField(tt2,rw_factor[i]-rw_rct[i]);
+				valueRwbias[i]->set(rw_factor[i]-rw_rct[i]);
 			}
-			ofw.printField();
-			ofw.flush();
 		}
 
 		if(is_debug)
