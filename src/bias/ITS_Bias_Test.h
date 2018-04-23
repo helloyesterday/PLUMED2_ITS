@@ -19,8 +19,8 @@
    You should have received a copy of the GNU Lesser General Public License
    along with plumed.  If not, see <http://www.gnu.org/licenses/>.
 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ */
-#ifndef __PLUMED_bias_ITS_Bias_h
-#define __PLUMED_bias_ITS_Bias_h
+#ifndef __PLUMED_bias_ITS_Bias_Test_h
+#define __PLUMED_bias_ITS_Bias_Test_h
 
 #include "Bias.h"
 #include "ActionRegister.h"
@@ -44,7 +44,7 @@
 namespace PLMD{
 namespace bias{
 
-class ITS_Bias: public Bias
+class ITS_Bias_Test: public Bias
 {
 private:
 	const unsigned update_start;
@@ -256,8 +256,8 @@ private:
 		const std::vector<double>& dalpha);
 
 public:
-	explicit ITS_Bias(const ActionOptions&);
-	~ITS_Bias();
+	explicit ITS_Bias_Test(const ActionOptions&);
+	~ITS_Bias_Test();
 	void calculate();
 	double calc_bias(double _beta) const
 		{return -gfsum/_beta-shift_energy;}
@@ -268,7 +268,7 @@ public:
 	static void registerKeywords(Keywords& keys);
 };
 
-inline void ITS_Bias::coe_rescale(double shift,std::vector<double>& coe)
+inline void ITS_Bias_Test::coe_rescale(double shift,std::vector<double>& coe)
 {
 	double coeshift=coe[0]+betak[0]*shift;
 	for(unsigned i=0;i!=coe.size();++i)

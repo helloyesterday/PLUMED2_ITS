@@ -46,9 +46,12 @@ class Bias :
   std::vector<double> outputForces;
 /// the pointer to the bias component
   Value *valueBias;
+/// the pointer to the reweight factor of bias component
+  Value *valueRct;
 /// linked to another bias
 /// the pointer be linked to another bias
   bool ex_bias_linked_;
+  bool is_set_rct;
   Bias* ex_bias_pntr_;
 /// the ratio of the extra bias
   double extra_bias_ratio_;
@@ -58,6 +61,9 @@ protected:
   void setOutputForce(int i,double f);
 /// set the value of the bias
   void setBias(double bias);
+/// set the value of the rct
+  void setRct(double rct);
+  void setRctComponent(const std::string& rct_name);
 public:
   static void registerKeywords(Keywords&);
   explicit Bias(const ActionOptions&ao);
@@ -67,6 +73,8 @@ public:
   void linkExternalBias(Bias*);
   bool ExternalBiasLinked() const {return ex_bias_linked_;}
   double getBias() const {return valueBias->get();}
+  bool isSetRct() const {return is_set_rct;}
+  double getRct() const {return valueRct->get();}
   void setExtraBiasRatio(double extra_bias_ratio_in) {extra_bias_ratio_=extra_bias_ratio_in;}
 ///
 };
@@ -80,6 +88,11 @@ void Bias::setOutputForce(int i,double f) {
 inline
 void Bias::setBias(double bias) {
   valueBias->set(bias);
+}
+
+inline
+void Bias::setRct(double rct) {
+  valueRct->set(rct);
 }
 
 inline

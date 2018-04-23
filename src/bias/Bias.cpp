@@ -32,6 +32,7 @@ Bias::Bias(const ActionOptions&ao):
   ActionWithArguments(ao),
   outputForces(getNumberOfArguments(),0.0),
   ex_bias_linked_(false),
+  is_set_rct(false),
   ex_bias_pntr_(NULL),
   extra_bias_ratio_(0)
 {
@@ -68,7 +69,11 @@ void Bias::apply() {
   if(ex_bias_linked_)
   {
     for(unsigned i=0; i<noa; ++i)
-      outputForces[i]*=(1.0+extra_bias_ratio_);
+    {
+      double opf=outputForces[i];
+      outputForces[i]*=1.0+extra_bias_ratio_;
+      valueBias->addDerivative(i,-opf*extra_bias_ratio_);
+	}
     extra_bias_ratio_=0;
   }
 
@@ -97,6 +102,14 @@ void Bias::apply() {
       getPntrToArgument(i)->addForce(f[i]);
     }
 
+}
+
+void Bias::setRctComponent(const std::string& rct_name){
+  addComponent(rct_name);
+  componentIsNotPeriodic(rct_name);
+  valueRct=getPntrToComponent(rct_name);
+  valueRct->set(0);
+  is_set_rct=true;
 }
 
 void Bias::linkExternalBias(Bias* ex_bias_pntr_in)
