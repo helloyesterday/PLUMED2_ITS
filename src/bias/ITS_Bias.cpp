@@ -242,6 +242,7 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	bias_linked(false),only_bias(false),is_read_ratio(false),
 	is_set_temps(false),is_set_ratios(false),is_norm_rescale(false),
 	read_fb(false),read_iter(false),fbtrj_output(false),rct_output(false),
+	partition_initial(false),
 	start_cycle(0),fb_stride(1),bias_stride(1),potdis_step(1),rctid(0),
 	min_ener(1e38),pot_bin(1),dU(1),dvp2_complete(0)
 {
@@ -438,7 +439,6 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 				int_ratios.push_back(temp_now/sim_temp);
 			}
 		}
-		
 		mcycle=start_cycle;
 		++start_cycle;
 	}
@@ -504,9 +504,11 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		norml.assign(nreplica,0);
 	
 	gU.assign(nreplica,0);
+	gE.assign(nreplica,0);
 	gf.assign(nreplica,0);
 	bgf.assign(nreplica,0);
 	rbfb.assign(nreplica,0);
+	rbzb.assign(nreplica,0);
 	fb_rct.assign(nreplica,0);
 	peshift_ratio.assign(nreplica,0);
 
@@ -551,6 +553,8 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 			fb.push_back(fb_init*(int_temps[i]-int_temps[0]));
 		}
 	}
+	if(!partition_initial)
+		partition.resize(nreplica,-1e38);
 
 	if(!equiv_temp&&!is_const)
 	{
@@ -892,6 +896,8 @@ void ITS_Bias::calculate()
 		energy=0;
 	else
 		energy=getArgument(0);
+		
+	shift_pot=energy+peshift;
 
 	cv_energy=energy;
 	
@@ -909,21 +915,23 @@ void ITS_Bias::calculate()
 	++step;
 
 	// U = U_total + E_shift
-	shift_energy=cv_energy+peshift;
+	input_energy=cv_energy+peshift;
 
 	if(equiv_temp)
 	{
-		eff_energy=shift_energy*eff_factor;
-		bias_energy=-1*shift_energy*bias_force;
+		eff_energy=input_energy*eff_factor;
+		bias_energy=-1*input_energy*bias_force;
 	}
 	else
 	{
 		for(unsigned i=0;i!=nreplica;++i)
 		{
+			// -\beta_k*U_pot
+			gU[i]=-betak[i]*shift_pot;
 			// -\beta_k*U
-			gU[i]=-betak[i]*shift_energy;
+			gE[i]=-betak[i]*input_energy;
 			// log[n_k*exp(-\beta_k*U)]
-			gf[i]=gU[i]+fb[i];
+			gf[i]=gE[i]+fb[i];
 			// log[\beta_k*n_k*exp(-\beta_k*U)]
 			bgf[i]=gf[i]+std::log(betak[i]);
 		}
@@ -934,17 +942,18 @@ void ITS_Bias::calculate()
 		bgfsum=bgf[0];
 		for(unsigned i=1;i!=nreplica;++i)
 		{
-			//~ exp_added(gUsum,gU[i]);
+			//~ exp_added(gUsum,gE[i]);
 			exp_added(gfsum,gf[i]);
 			exp_added(bgfsum,bgf[i]);
 		}
 
 		// U_EFF=-1/\beta_0*log{\sum_k[n_k*exp(-\beta_k*U)]}
 		eff_energy=-gfsum/beta0;
-		bias_energy=eff_energy-shift_energy;
+		bias_energy=eff_energy-input_energy;
 		eff_factor=exp(bgfsum-gfsum)/beta0;
 		bias_force=1.0-eff_factor;
 	}
+		
 
 	setBias(bias_energy);
 	valueRBias->set(bias_energy-rct);
@@ -958,7 +967,7 @@ void ITS_Bias::calculate()
 	if(!only_bias)
 		setOutputForce(0,bias_force);
 
-	valueEnergy->set(shift_energy);
+	valueEnergy->set(input_energy);
 	valueForce->set(eff_factor);
 
 	if(potdis_output)
@@ -1032,7 +1041,7 @@ void ITS_Bias::calculate()
 					odebug.printField("tot_bias",tot_bias);
 				odebug.printField("cv_energy",cv_energy);
 				odebug.printField("peshift",peshift);
-				odebug.printField("shift_energy",shift_energy);
+				odebug.printField("input_energy",input_energy);
 				odebug.printField("eff_energy",eff_energy);
 				odebug.printField("bias_energy",bias_energy);
 				odebug.printField();
@@ -1129,12 +1138,18 @@ inline void ITS_Bias::update_rbfb()
 	if(norm_step==0)
 	{
 		for(unsigned i=0;i!=nreplica;++i)
+		{
 			rbfb[i]=gf[i];
+			rbzb[i]=gU[i]-gfsum-betak[i]*fb_rct[i];
+		}
 	}
 	else
 	{
 		for(unsigned i=0;i!=nreplica;++i)
+		{
 			exp_added(rbfb[i],gf[i]);
+			exp_added(rbzb[i],gU[i]-gfsum-betak[i]*fb_rct[i]);
+		}
 	}
 }
 
@@ -1148,12 +1163,18 @@ inline void ITS_Bias::update_rbfb_direct()
 	if(norm_step==0)
 	{
 		for(unsigned i=0;i!=nreplica;++i)
+		{
 			rbfb[i]=gf[i]-gfsum;
+			rbzb[i]=gU[i]-gfsum-betak[i]*fb_rct[i];
+		}
 	}
 	else
 	{
 		for(unsigned i=0;i!=nreplica;++i)
+		{
 			exp_added(rbfb[i],gf[i]-gfsum);
+			exp_added(rbzb[i],gU[i]-gfsum-betak[i]*fb_rct[i]);
+		}
 	}
 }
 
@@ -1168,28 +1189,40 @@ void ITS_Bias::mw_merge_rbfb()
 	
 	std::vector<double> all_min_ener(nw,0);
 	std::vector<double> all_rbfb(nw*nreplica,0);
+	std::vector<double> all_rbzb(nw*nreplica,0);
 	if(comm.Get_rank()==0)
 	{
 		multi_sim_comm.Allgather(rbfb,all_rbfb);
+		multi_sim_comm.Allgather(rbzb,all_rbzb);
 		multi_sim_comm.Allgather(min_ener,all_min_ener);
 	}
 	comm.Bcast(all_rbfb,0);
+	comm.Bcast(all_rbzb,0);
 	comm.Bcast(all_min_ener,0);
 
 	min_ener=all_min_ener[0];
 	for(unsigned j=0;j!=rbfb.size();++j)
+	{
 		rbfb[j]=all_rbfb[j];
+		rbzb[j]=all_rbzb[j];
+	}
 	for(unsigned i=1;i<nw;++i)
 	{
 		if(all_min_ener[i]<min_ener)
 			min_ener=all_min_ener[i];
 		for(unsigned j=0;j!=rbfb.size();++j)
+		{
 			exp_added(rbfb[j],all_rbfb[i*rbfb.size()+j]);
+			exp_added(rbzb[j],all_rbzb[i*rbzb.size()+j]);
+		}
 	}
 	if(is_ves||is_direct)
 	{
-		for(unsigned i=1;i!=nreplica;++i)
+		for(unsigned i=0;i!=nreplica;++i)
+		{
 			rbfb[i]-=std::log(static_cast<double>(nw));
+			rbzb[i]-=std::log(static_cast<double>(nw));
+		}
 	}
 }
 
@@ -1198,8 +1231,11 @@ void ITS_Bias::fb_iteration()
 {
 	if(is_direct)
 	{
-		for(unsigned i=1;i!=nreplica;++i)
+		for(unsigned i=0;i!=nreplica;++i)
+		{
 			rbfb[i]-=std::log(static_cast<double>(update_step));
+			rbzb[i]-=std::log(static_cast<double>(update_step));
+		}
 	}
 	else
 	{
@@ -1207,8 +1243,26 @@ void ITS_Bias::fb_iteration()
 		for(unsigned i=1;i!=nreplica;++i)
 			exp_added(rbfbsum,rbfb[i]);
 		for(unsigned i=0;i!=nreplica;++i)
+		{
 			rbfb[i]-=rbfbsum;
+			rbzb[i]-=std::log(static_cast<double>(update_step));
+		}
 	}
+
+	if(partition_initial)
+	{
+		for(unsigned i=0;i!=nreplica;++i)
+			exp_added(partition[i],rbzb[i]);
+	}
+	else
+	{
+		for(unsigned i=0;i!=nreplica;++i)
+			partition[i]=rbzb[i];
+		partition_initial=true;
+	}
+
+	
+	
 	
 	// ratio[k]=log[m_k(t)]
 	std::vector<double> ratio;
@@ -1489,7 +1543,7 @@ void ITS_Bias::output_fb()
 			}
 			else
 				ofb.printField("norm_value",norml[i]);
-			ofb.printField("rct_value",fb_rct[i]);
+			ofb.printField("partition",partition[i]);
 			ofb.printField();
 		}
 		ofb.printf("#!-----END-OF-FB-COEFFICIENTS-----\n\n");
@@ -1758,6 +1812,12 @@ unsigned ITS_Bias::read_fb_file(const std::string& fname,double& _kB,double& _pe
 			}
 		}
 		
+		if(ifb.FieldExist("partition"))
+		{
+			partition.resize(_ntemp);
+			partition_initial=true;
+		}
+
 		if(is_ves)
 		{
 			if(read_iter)
@@ -1814,6 +1874,12 @@ unsigned ITS_Bias::read_fb_file(const std::string& fname,double& _kB,double& _pe
 				double tmpnb;
 				ifb.scanField("norm_value",tmpnb);
 				norml[i]=tmpnb;
+			}
+			if(partition_initial)
+			{
+				double zk;
+				ifb.scanField("partition",zk);
+				partition[i]=zk;
 			}
 			fb[i]=tmpfb;
 			

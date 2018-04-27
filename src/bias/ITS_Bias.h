@@ -63,8 +63,9 @@ private:
 	double sim_temp;
 	double peshift;
 	double energy;
+	double shift_pot;
 	double cv_energy;
-	double shift_energy;
+	double input_energy;
 	double eff_energy;
 	double eff_factor;
 	double bias_energy;
@@ -83,11 +84,14 @@ private:
 	std::vector<double> rbfb_ratios;
 
 	std::vector<double> gU;
+	std::vector<double> gE;
 	std::vector<double> gf;
 	std::vector<double> bgf;
 	std::vector<double> rbfb;
+	std::vector<double> rbzb;
 	std::vector<double> pot_aver;
 	std::vector<double> pot_norm;
+	std::vector<double> partition;
 
 	std::vector<double> energy_mean;
 	std::vector<double> energy_dev;
@@ -157,6 +161,7 @@ private:
 	bool fbtrj_output;
 	bool rct_output;
 	bool no_bias_rct;
+	bool partition_initial;
 	//~ bool norm_output;
 	//~ bool peshift_output;
 	unsigned update_step;
@@ -260,7 +265,7 @@ public:
 	~ITS_Bias();
 	void calculate();
 	double calc_bias(double _beta) const
-		{return -gfsum/_beta-shift_energy;}
+		{return -gfsum/_beta-input_energy;}
 	double calc_rct(double _beta,double _fb,double _fb_ratio) const
 		{return (_fb_ratio-_fb)/_beta;}
 	double calc_rct(double _beta,double _fb) const
