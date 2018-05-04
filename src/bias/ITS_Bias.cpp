@@ -135,11 +135,11 @@ void ITS_Bias::registerKeywords(Keywords& keys)
 {
 	Bias::registerKeywords(keys);
 	keys.addOutputComponent("rbias","default","the revised bias potential using rct");
-	keys.addOutputComponent("energy","default","the instantaneous value of the potential energy of the system");
 	keys.addOutputComponent("rct","default","the reweighting revise factor");
 	keys.addOutputComponent("force","default","the instantaneous value of the bias force");
-	//~ keys.addOutputComponent("rbias_T","RW_TEMP","the revised bias potential at different temperatures");
+	keys.addOutputComponent("potential","default","the instantaneous value of the potential energy of the system");
 	keys.addOutputComponent("effective","DEBUG_FILE","the instantaneous value of the effective potential");
+	//~ keys.addOutputComponent("rbias_T","RW_TEMP","the revised bias potential at different temperatures");
 	keys.addOutputComponent("rwfb","DEBUG_FILE","the revised bias potential using rct");
 	ActionWithValue::useCustomisableComponents(keys);
 	keys.remove("ARG");
@@ -671,13 +671,19 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	
 	addComponent("rbias"); componentIsNotPeriodic("rbias");
 	valueRBias=getPntrToComponent("rbias");
-	addComponent("energy"); componentIsNotPeriodic("energy");
-	valueEnergy=getPntrToComponent("energy");
+	//~ addComponent("energy"); componentIsNotPeriodic("energy");
+	//~ valueEnergy=getPntrToComponent("energy");
 	//~ addComponent("rct"); componentIsNotPeriodic("rct");
 	//~ valueRct=getPntrToComponent("rct");
 	//~ valueRct->set(rct);
 	setRctComponent("rct");
 	setRct(rct);
+	addComponent("force"); componentIsNotPeriodic("force");
+	valueForce=getPntrToComponent("force");
+	addComponent("Potential"); componentIsNotPeriodic("Potential");
+	valuePot=getPntrToComponent("Potential");
+	addComponent("effective"); componentIsNotPeriodic("effective");
+	valueEff=getPntrToComponent("effective");
 
 	parseVector("RW_TEMP",rw_temp);
 
@@ -730,14 +736,10 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	
 	if(is_debug)
 	{
-		addComponent("effective"); componentIsNotPeriodic("effective");
-		valueEff=getPntrToComponent("effective");
 		addComponent("rwfb"); componentIsNotPeriodic("rwfb");
 		valueRwfb=getPntrToComponent("rwfb");
 		valueRwfb->set(fb0);
 	}
-	addComponent("force"); componentIsNotPeriodic("force");
-	valueForce=getPntrToComponent("force");
 
 	checkRead();
 
@@ -967,7 +969,9 @@ void ITS_Bias::calculate()
 	if(!only_bias)
 		setOutputForce(0,bias_force);
 
-	valueEnergy->set(input_energy);
+	//~ valueEnergy->set(input_energy);
+	valuePot->set(shift_pot);
+	valueEff->set(eff_energy);
 	valueForce->set(eff_factor);
 
 	if(potdis_output)

@@ -71,11 +71,13 @@ namespace bias {
 
 class ReweightITS : public ReweightBase {
 private:
+    unsigned narg;
+    unsigned effid;
+    unsigned potid;
 /// The temperature at which you are running the simulation
-	bool rw_other;
 	bool use_fb;
 	bool calc_rct;
-	
+
 	double kB;
 	double sim_temp;
 	double rw_temp;
@@ -90,7 +92,7 @@ private:
 	
 	std::string fb_file;
 	
-	unsigned nreplica;
+	//~ unsigned nreplica;
 	
 	unsigned read_fb_file(const std::string& fname);
 	double calc_rct_value(double rwtemp);
@@ -104,222 +106,53 @@ PLUMED_REGISTER_ACTION(ReweightITS,"REWEIGHT_ITS")
 
 void ReweightITS::registerKeywords(Keywords& keys ){
   ReweightBase::registerKeywords( keys ); keys.remove("ARG");
-  keys.remove("TEMP");
-  keys.add("compulsory","ARG","the biases that must be taken into account when reweighting. If you want to reweight the system at other temperatures, please set the ITS-energy at the 1st argument, the ITS-bias at the 2nd argument"); 
-  keys.add("compulsory","SIM_TEMP","the reweighting temperature.  If it is not assigned, it will be equal to the system temperatures");
-  keys.add("optional","RW_TEMP","the simulation temperature.");
-  keys.add("optional","FB_FILE","using fb file to calculate reweighting factor"); 
-  keys.addFlag("USE_FB_FILE",false,"use fb file to calculate the reweight. The eneryg of ITS must be the first term at ARG and DO NOT put the bias of ITS at ARG");
-  keys.addFlag("CALC_RCT",false,"calculate the c(t) from the fb file and use it at the reweighting");
+  keys.add("compulsory","ARG","The arguments"); 
+  keys.add("optional","RW_TEMP","the reweight temperature. If it is not assigned, it will be equal to the system temperatures");
   keys.add("optional","SHIFT","a constant energy to shift the bias potential when they are too large or too small");
+  keys.add("optional","RCT","the c(t) at the reweight temperature");
 }
 
 ReweightITS::ReweightITS(const ActionOptions&ao):
 Action(ao),
 ReweightBase(ao),
-rw_other(false),
+narg(getNumberOfArguments()),
 shift_const(0),
 rct(0)
 {
-	
+	plumed_massert(narg>=2,"The reweight of ITS need at least two arguments: the potential energy of the system and the effective potential\n");
 	kB=plumed.getAtoms().getKBoltzmann();
-	parse("SIM_TEMP",sim_temp);
 	
-	beta0=1.0/(kB*sim_temp);
+	beta0=1.0/simtemp;
+	sim_temp=simtemp/kB;
 	
 	rw_temp=-1;
 	parse("RW_TEMP",rw_temp);
 	if(rw_temp>0)
-	{
 		betaRW=1.0/(kB*rw_temp);
-		rw_other=true;
-	}
 	else
 	{
 		betaRW=beta0;
 		rw_temp=sim_temp;
 	}
+
+	parse("RCT",rct);
+	parse("SHIFT",shift_const);
 	
-	parse("SHIFT_CONST",shift_const);
-	
-	plumed_massert(getNumberOfArguments()>=2,"to reweight at the other temperature need at least two arguments: its.energy and its.bias. Please put them as the 1st and 2nd ARG");
-	
-	parse("FB_FILE",fb_file);
-	parseFlag("USE_FB_FILE",use_fb);
-	if(use_fb&&fb_file.size()==0)
-		plumed_merror("USE_FB_FILE must set the fb file at FB_FILE");
-	parseFlag("CALC_RCT",calc_rct);
-	if(calc_rct&&fb_file.size()==0)
-		plumed_merror("CALC_RCT must set the fb file at FB_FILE");
-	
-	if(use_fb||calc_rct)
-		read_fb_file(fb_file);
-	if(calc_rct)
-		rct=calc_rct_value(rw_temp);
+	log.printf("  with Boltzmann constant: %f\n",kB);
+	log.printf("  with simulation temperature: %f K (%f)\n",sim_temp,beta0);
+	log.printf("  with reweight temperature: %f K (%f)\n",rw_temp,betaRW);
+	log.printf("  with revise factor c(t): %f\n",rct);
+	log.printf("  with constant shift energy: %f\n",shift_const);
 }
 
 double ReweightITS::getLogWeight() const
 {
-	if(use_fb)
-	{
-		double its_energy=getArgument(0);
-		double other_bias=shift_const;
-		for(unsigned i=1;i<getNumberOfArguments();++i)
-			other_bias+=getArgument(i);
-	
-		double factor=0;
-		for(unsigned i=0;i!=nreplica;++i)
-			factor+=exp(fb[i]+(betaRW-betak[i])*its_energy);
-		return -std::log(factor) + betaRW * other_bias - rct;
-	}
-	else
-	{
-		if(rw_other)
-		{
-			double its_energy=getArgument(0);
-			double its_bias=getArgument(1);
-			double other_bias=shift_const;
-			for(unsigned i=2;i<getNumberOfArguments();++i)
-				other_bias+=getArgument(i);
+	double pot=getArgument(0);
+	double eff=0;
+	for(unsigned i=1;i<narg;++i)
+		eff+=getArgument(i);
 
-			return beta0 * its_bias + ( beta0 - betaRW ) * its_energy + betaRW * other_bias - rct;
-		}
-		else
-		{
-			double bias=shift_const;
-			for(unsigned i=0;i<getNumberOfArguments();++i)
-				bias+=getArgument(i);
-			return betaRW * bias - rct;
-		}
-	}
-}
-
-unsigned ReweightITS::read_fb_file(const std::string& fname)
-{	
-	IFile ifb;
-		
-	if(!ifb.FileExist(fname))
-		plumed_merror("Cannot find fb file " + fname );
-    ifb.open(fname);
-    
-	ifb.allowIgnoredFields();
-
-	unsigned read_count=0;
-	bool is_set_ratios=false;
-	
-	std::vector<double> int_ratios,int_temps;
-	while(ifb)
-	{
-		
-		std::string coe_type="TEMPERATURE";
-		if(ifb.FieldExist("COEFFICIENT_TYPE"))
-			ifb.scanField("COEFFICIENT_TYPE",coe_type);
-
-		if(coe_type=="RATIO")
-			is_set_ratios=true;
-		else if(coe_type!="TEMPERATURE")
-			plumed_merror("unrecognized COEFFICIENT_TYPE "+coe_type);
-
-		
-		if(ifb.FieldExist("NREPLICA"))
-		{
-			int int_ntemp;
-			ifb.scanField("NREPLICA",int_ntemp);
-			nreplica=int_ntemp;
-		}
-		else
-			plumed_merror("Can't find the NREPLICA from the fb file: "+fname);
-		
-		if(is_set_ratios)
-			int_ratios.resize(nreplica);
-		else
-			int_temps.resize(nreplica);
-		fb.resize(nreplica);
-
-		if(ifb)
-		{
-			if(!ifb.FieldExist("fb_value"))
-				plumed_merror("cannot found \"fb_value\" in file \""+fname+"\"");
-			if(!is_set_ratios&&!ifb.FieldExist("temperature"))
-				plumed_merror("cannot found \"temperature\" in file \""+fname+"\"");
-			if(is_set_ratios&&!ifb.FieldExist("replica_ratio"))
-				plumed_merror("cannot found \"replica_ratio\" in file \""+fname+"\"");
-		}
-		else
-			break;
-		
-		double tmpfb;
-		for(unsigned i=0;i!=nreplica;++i)
-		{
-			ifb.scanField("fb_value",tmpfb);
-			double tmpt;
-			if(is_set_ratios)
-			{
-				ifb.scanField("replica_ratio",tmpt);
-				int_ratios[i]=tmpt;
-				int_temps[i]=sim_temp/tmpt;
-			}
-			else
-			{
-				ifb.scanField("temperature",tmpt);
-				int_temps[i]=tmpt;
-				int_ratios[i]=sim_temp/tmpt;
-			}
-			
-			fb[i]=tmpfb;
-			ifb.scanField();
-		}
-		++read_count;
-	}
-	
-	betak.resize(nreplica);
-	if(is_set_ratios)
-		int_temps.resize(nreplica);
-	for(unsigned i=0;i!=nreplica;++i)
-	{
-		if(is_set_ratios)
-		{
-			betak[i]=beta0*int_ratios[i];
-			int_temps[i]=sim_temp/int_ratios[i];
-		}
-		else
-			betak[i]=1.0/(kB*int_temps[i]);
-	}
-
-	ifb.close();
-	return read_count;
-}
-
-double ReweightITS::calc_rct_value(double rwtemp)
-{
-	double dtl=0,dth=0;
-	
-	unsigned rwid=0;
-	for(unsigned i=0;i!=nreplica-1;++i)
-	{
-		dtl=rwtemp-int_temps[i];
-		dth=int_temps[i+1]-rwtemp;
-		if(dtl>=0&&dth>=0)
-		{
-			rwid=i;
-			break;
-		}
-	}
-	
-	if(rwid+1==nreplica)
-		plumed_merror("Can't find the fb value responds to the reweight temperature");
-		
-	double fbl=fb[rwid];
-	double fbh=fb[rwid+1];
-	double dfb=fbh-fbl;
-	
-	double rwfb;
-	if(dtl<dth)
-		rwfb=fbl+dfb*dtl/(dtl+dth);
-	else
-		rwfb=fbh-dfb*dth/(dtl+dth);
-		
-	return -(rwfb+std::log(double(nreplica)))/betaRW;;
+	return beta0 * eff + (shift_const - pot - rct ) * betaRW;
 }
 
 }

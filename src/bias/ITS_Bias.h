@@ -224,7 +224,8 @@ private:
 	
 	std::vector<Bias*> bias_pntrs_;
 	
-	Value* valueEnergy;
+	//~ Value* valueEnergy;
+	Value* valuePot;
 	Value* valueEff;
 	Value* valueForce;
 	Value* valueRBias;
