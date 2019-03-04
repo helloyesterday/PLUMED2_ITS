@@ -1,5 +1,5 @@
 /* +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-   Copyright (c) 2011-2017 The plumed team
+   Copyright (c) 2011-2018 The plumed team
    (see the PEOPLE file at the root of the distribution for a list of names)
 
    See http://www.plumed.org for more information.
@@ -30,6 +30,7 @@
 #include <limits>
 #include <algorithm>
 #include <sstream>
+#include <memory>
 
 namespace PLMD {
 
@@ -137,6 +138,50 @@ public:
 /// Check if a string full starts with string start.
 /// Same as full.find(start)==0
   static bool startWith(const std::string & full,const std::string &start);
+  /**
+    Tool to create a vector of raw pointers from a vector of unique_pointers (const version).
+  Returning a vector is fast in C++11. It can be used in order to feed a vector<unique_ptr<T>>
+  to a function that takes a vector<T*>.
+  \verbatim
+  // some function that takes a vec
+  void func(std::vector<Data*> & vec);
+  std::vector<std::unique_ptr<Data>> vec;
+  // func(vec); // does not compile
+  func(Tools::unique2raw(vec)); // compiles
+  \endverbatim
+  Notice that the conversion is fast but takes
+  some time to allocate the new vector and copy the pointers. In case the function
+  acting on the vector<T*> is very fast and we do not want to add significant overhead,
+  it might be convenient to store a separate set of raw pointers.
+  \verbatim
+  // some function that takes a vec
+  void func(std::vector<Data*> & vec);
+  std::vector<std::unique_ptr<Data>> vec;
+
+  // conversion done only once:
+  auto vec_ptr=Tools::unique2raw(vec);
+
+  for(int i=0;i<1000;i++){
+    func(vec_ptr);
+  }
+  \endverbatim
+  */
+  template <typename T>
+  static std::vector<T*> unique2raw(const std::vector<std::unique_ptr<T>>&);
+/// Tool to create a vector of raw pointers from a vector of unique_pointers.
+/// See the non const version.
+  template <typename T>
+  static std::vector<const T*> unique2raw(const std::vector<std::unique_ptr<const T>>&);
+/// Tiny class that changes directory and comes back when going out of scope.
+/// In case system calls to change dir are not available it throws an exception.
+/// \warning By construction, changing directory breaks thread safety! Use with care.
+  class DirectoryChanger {
+    static const size_t buffersize=4096;
+    char cwd[buffersize]= {0};
+  public:
+    explicit DirectoryChanger(const char*path);
+    ~DirectoryChanger();
+  };
 };
 
 template <class T>
@@ -233,9 +278,21 @@ double Tools::fastpow(double base, int exp)
   return result;
 }
 
+template<typename T>
+std::vector<T*> Tools::unique2raw(const std::vector<std::unique_ptr<T>> & x) {
+  std::vector<T*> v(x.size());
+  for(unsigned i=0; i<x.size(); i++) v[i]=x[i].get();
+  return v;
+}
+
+template<typename T>
+std::vector<const T*> Tools::unique2raw(const std::vector<std::unique_ptr<const T>> & x) {
+  std::vector<const T*> v(x.size());
+  for(unsigned i=0; i<x.size(); i++) v[i]=x[i].get();
+  return v;
+}
+
 // Added by Y. Isaac Yang to calculate the summation of exponents
-// expsum = exp_add(exp1,exp2);
-// exp(expsum)=exp(exp1)+exp(exp2)
 inline double exp_add(double exp1,double exp2)
 {
 	if(exp1>exp2)
@@ -244,14 +301,39 @@ inline double exp_add(double exp1,double exp2)
 		return exp2+std::log(1.0+exp(exp1-exp2));
 }
 
-// exp_added(expsum,expvalue)
-// expsum=log(exp(expsum)+exp(expvalue)
 inline void exp_added(double& expsum,double expvalue)
 {
 	if(expsum>expvalue)
 		expsum=expsum+std::log(1.0+exp(expvalue-expsum));
 	else
 		expsum=expvalue+std::log(1.0+exp(expsum-expvalue));
+}
+
+inline double exp_minus(double exp1,double exp2,bool& sign)
+{
+	if(exp1>exp2)
+	{
+		sign=false;
+		return exp1+std::log(1.0-exp(exp2-exp1));
+	}
+	else
+	{
+		sign=true;
+		return exp2+std::log(1.0-exp(exp1-exp2));
+	}
+}
+
+inline double exp_calc(double exp1,double exp2,bool sign1,bool sign2,bool& sign_fin)
+{
+	if(sign1==sign2)
+	{
+		sign_fin=sign1;
+		return exp_add(exp1,exp2);
+	}
+	else if(sign1)
+		return exp_minus(exp2,exp1,sign_fin);
+	else
+		return exp_minus(exp1,exp2,sign_fin);
 }
 
 }
