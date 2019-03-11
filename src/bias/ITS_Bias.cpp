@@ -1262,9 +1262,6 @@ void ITS_Bias::fb_iteration()
 		partition_initial=true;
 	}
 
-	
-	
-	
 	// ratio[k]=log[m_k(t)]
 	std::vector<double> ratio;
 	std::vector<double> old_fb;
