@@ -57,14 +57,14 @@ private:
 	double kBT;
 	double kBT_target;
 	double beta0;
-	double ratio_energy;
 	double beta_target;
 	double target_temp;
 	double sim_temp;
 	double peshift;
 	double energy;
+	double shift_pot;
 	double cv_energy;
-	double shift_energy;
+	double input_energy;
 	double eff_energy;
 	double eff_factor;
 	double bias_energy;
@@ -83,11 +83,16 @@ private:
 	std::vector<double> rbfb_ratios;
 
 	std::vector<double> gU;
+	std::vector<double> gE;
 	std::vector<double> gf;
 	std::vector<double> bgf;
 	std::vector<double> rbfb;
+	std::vector<double> rbfb2;
+	std::vector<double> rbzb;
 	std::vector<double> pot_aver;
 	std::vector<double> pot_norm;
+	std::vector<double> zbe;
+	std::vector<double> zbu;
 
 	std::vector<double> energy_mean;
 	std::vector<double> energy_dev;
@@ -100,7 +105,7 @@ private:
 	std::vector<double> rw_dtl;
 	std::vector<double> rw_rct;
 	std::vector<double> rw_fb_ratios;
-	std::vector<unsigned> rw_rctid;
+	std::vector<double> rw_rctid;
 	std::vector<unsigned> pot_dis;
 	std::vector<std::string> rw_tstr;
 
@@ -113,15 +118,11 @@ private:
 	std::vector<double> bias_ratio;
 	std::vector<double> peshift_ratio;
 
-	// The average of 1st order drivative of bias potential in target distribution
-	std::vector<double> deriv_ps;
-	// The average of 2nd order drivative of bias potential in target distribution
-	std::vector<double> deriv2_ps;
-
 	unsigned long step;
 	unsigned norm_step;
 	unsigned mcycle;
 	unsigned iter_limit;
+	unsigned ema_days;
 	double fb_init;
 	double fb_bias;
 	double rb_fac1;
@@ -130,17 +131,19 @@ private:
 	double bias_min;
 	double bias_max;
 	double d_pot;
-	double step_size;
+	double temp_ratio_energy;
+	//~ double neighbor_ratio;
 
 	bool equiv_temp;
 	bool is_const;
 	bool rw_output;
-	bool is_ves;
 	bool read_norm;
 	bool only_1st;
 	bool use_mw;
 	bool bias_output;
 	bool rbfb_output;
+	bool zke_output;
+	bool zku_output;
 	bool is_debug;
 	bool potdis_output;
 	bool bias_linked;
@@ -151,14 +154,19 @@ private:
 	bool is_set_temps;
 	bool is_set_ratios;
 	bool is_norm_rescale;
-	bool is_direct;
 	bool read_fb;
 	bool read_iter;
 	bool fbtrj_output;
 	bool rct_output;
 	bool no_bias_rct;
+	bool read_zbu;
+	bool use_partition;
+	bool do_anneal;
+	bool use_ema;
+	bool use_trad;
 	//~ bool norm_output;
 	//~ bool peshift_output;
+	
 	unsigned update_step;
 	unsigned start_cycle;
 	unsigned fb_stride;
@@ -170,7 +178,6 @@ private:
 	unsigned potdis_step;
 	unsigned potdis_update;
 	unsigned nbiases;
-	unsigned rctid;
 
 	std::string fb_file;
 	std::string fb_trj;
@@ -184,16 +191,17 @@ private:
 	std::string debug_file;
 	std::string potdis_file;
 	std::string rbfb_file;
+	std::string zke_file;
+	std::string zku_file;
 	std::string rct_file;
 
 	OFile ofb;
 	OFile ofbtrj;
-	//~ OFile onormtrj;
-	//~ OFile oderiv;
-	//~ OFile opstrj;
 	OFile ofw;
 	OFile obias;
 	OFile orbfb;
+	OFile ozke;
+	OFile ozku;
 	OFile orct;
 	OFile odebug;
 	OFile opotdis;
@@ -205,11 +213,14 @@ private:
 	double pot_max;
 	double pot_bin;
 	double tot_bias;
-	double sim_dtl;
-	double sim_dth;
+	//~ double rbfb_ratio;
 	double logN;
+	double Nlogr;
 	double ratio_norm;
 	double fb_ratio0;
+	double rctid;
+	double wemat;
+	double wemay;
 
 	unsigned ntarget;
 	double ener_min;
@@ -219,7 +230,8 @@ private:
 	
 	std::vector<Bias*> bias_pntrs_;
 	
-	Value* valueEnergy;
+	//~ Value* valueEnergy;
+	Value* valuePot;
 	Value* valueEff;
 	Value* valueForce;
 	Value* valueRBias;
@@ -227,20 +239,19 @@ private:
 	std::vector<Value*> valueRwbias;
 
 	inline void update_rbfb();
-	inline void update_rbfb_direct();
 	
 	void fb_iteration();
-	void fb_variational();
+	void fb_iteration2();
+	void zbu_iteration();
+	void fb_partition();
 	void output_fb();
 	void mw_merge_rbfb();
 	void output_bias();
 	void setupOFile(std::string& file_name, OFile& ofile, const bool multi_sim_single_files);
 	void setupOFiles(std::vector<std::string>& fnames, std::vector<OFile*>& OFiles, const bool multi_sim_single_files);
 	unsigned read_fb_file(const std::string& fname,double& _kB,double& _peshift);
-	double calc_deriv2();
-	unsigned find_rw_id(double rwtemp,double& dtl,double& dth);
-	double find_rw_fb(unsigned rwid,double dtl,double dth);
-	double find_rw_fb(double rwtemp);
+	double find_rw_id(double rwtemp);
+	double find_rw_fb(double real_id);
 
 	inline void coe_rescale(double shift,std::vector<double>& coe);
 	inline void fb_rescale(double shift){coe_rescale(shift,fb);}
@@ -248,23 +259,16 @@ private:
 	void change_peshift(double new_shift);
 	void set_peshift_ratio();
 
-	std::vector<double> omega2_alpha(
-		const std::vector<std::vector<double> >& hessian,
-		const std::vector<double>& dalpha);
-	std::vector<double> omega2_alpha(
-		const std::vector<double>& hessian,
-		const std::vector<double>& dalpha);
-
 public:
 	explicit ITS_Bias_Test(const ActionOptions&);
 	~ITS_Bias_Test();
 	void calculate();
 	double calc_bias(double _beta) const
-		{return -gfsum/_beta-shift_energy;}
+		{return -gfsum/_beta-input_energy;}
 	double calc_rct(double _beta,double _fb,double _fb_ratio) const
 		{return (_fb_ratio-_fb)/_beta;}
-	double calc_rct(double _beta,double _fb) const
-		{return (-logN-_fb)/_beta;}
+	//~ double calc_rct(double _beta,double _fb) const
+		//~ {return (-logN-_fb)/_beta;}
 	static void registerKeywords(Keywords& keys);
 };
 

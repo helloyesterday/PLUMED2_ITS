@@ -1,5 +1,5 @@
 /* +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-   Copyright (c) 2011-2018 The plumed team
+   Copyright (c) 2011-2019 The plumed team
    (see the PEOPLE file at the root of the distribution for a list of names)
 
    See http://www.plumed.org for more information.
@@ -307,6 +307,12 @@ inline void exp_added(double& expsum,double expvalue)
 		expsum=expsum+std::log(1.0+exp(expvalue-expsum));
 	else
 		expsum=expvalue+std::log(1.0+exp(expsum-expvalue));
+}
+
+inline double exp_minus(double exp1,double exp2)
+{
+	plumed_massert(exp1>exp2,"exp1 must be larger than exp2 when doing exp_minus");
+	return exp1+std::log(1.0-exp(exp2-exp1));
 }
 
 inline double exp_minus(double exp1,double exp2,bool& sign)
