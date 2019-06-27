@@ -663,20 +663,23 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	parse("PEGAUSS_FILE",pegauss_file);
 	output_pegauss=false;
 	pegauss_update=1;
-	int_num=1000;
+	dE_num=1000;
 	if(pegauss_file.size()>0)
 	{
 		do_calc_pegauss=true;
 		output_pegauss=true;
 		avg_step=0;
 		parse("PEGAUSS_STEP",pegauss_update);
-		parse("PEGAUSS_BINS",int_num);
+		parse("PEGAUSS_BINS",dE_num);
 		parse("PEGAUSS_SHIFT",avg_shift);
 		parse("GAUSS_INTEGRATE_RANGE",gauss_limit);
+		
+		int_num=dE_num+1;
 		
 		setupOFile(pegauss_file,opegauss,use_mw);
 		opegauss.addConstantField("ITERATION");
 		opegauss.addConstantField("BOLTZMANN_CONSTANT");
+		opegauss.addConstantField("TEMP_RATIO_ENERGY");
 		
 		peavg.assign(nreplica,1e-38);
 		peavg2.assign(nreplica,1e-38);
@@ -768,6 +771,11 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	}
 
 	checkRead();
+	
+	log<<"  with bibliography ";
+	log<<plumed.cite("Gao, J. Chem. Phys. 128, 064105 (2008)");
+	log<<plumed.cite("Yang, Niu and Parrinello, J. Phys. Chem. Lett. 9, 6426 (2018)");
+	log<<"\n";
 
 	log.printf("  with simulation temperature: %f\n",sim_temp);
 	log.printf("  with boltzmann constant: %f\n",kB);
@@ -858,11 +866,20 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 
 		if(!is_const)
 		{
-			log.printf("  Using ITS update\n");
-			if(rw_partition)
-				log.printf("    with direct integration to calculate the avaerage of rbfb at each step\n");
+			log.printf("  Updating fb values\n");
+			if(abs_ratio)
+				log.printf("    using the absolute ratio of the partition function at each temperature\n");
 			else
-				log.printf("    with reweighting to calculate the avaerage of rbfb at each step\n");
+			{
+				log.printf("    using the relative ratio between the partition functions between two neighbor temperatures.");
+				log<<plumed.cite("Gao, J. Chem. Phys. 128, 134111 (2008)");
+				log.printf("\n");
+			}
+				
+			if(rw_partition)
+				log.printf("    with integration of the direct avaerage to calculate the partition functions (Z_k(E)=\\sum_t(n_k*exp(-beta_k*E(t))))\n");
+			else
+				log.printf("    with integration of the reweight avaerage to calculate the partition functions (Z_k(E)=\\sum_t[exp(beta_k*{V_k[E(t)]-c_k(t)})])\n");
 			log.printf("    with calculating the avaerage of rbfb at the end of fb updating\n");
 			log.printf("    with frequence of FB value update: %d\n",update_step);
 			if(use_ema)
@@ -881,17 +898,27 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		}
 		if(rw_output)
 		{
-			log.printf("    with reweighting factor at temperature:\n");
+			log.printf("  Output reweighting factor at temperature:\n");
 			for(unsigned i=0;i!=rw_temp.size();++i)
 				log.printf("    %d\t%fK(%f) fit at %f temperature with target ratio %f\n",int(i),rw_temp[i],rw_beta[i],rw_rctid[i],rw_fb_ratios[i]);
 		}
+		
+		if(do_calc_pegauss)
+		{
+			log.printf("  Estimating the distribution of potential energy as Gaussian distribuition");
+			log.printf("    with updating for each %d cycles\n",int(pegauss_update));
+			log.printf("    with the range of integration as %f times of standard deviation\n",gauss_limit);
+			log.printf("    with integration bins: %d\n",int(int_num));
+			if(output_pegauss)
+				log.printf("    with distribution output to file: %s\n",pegauss_file.c_str());
+			if(do_anneal&&!is_const)
+			{
+				log.printf("  Using annealing with rate $f\n",anneal_rate);
+			}
+		}
+		
 		if(is_debug)
 			log.printf("  Using debug mod with output file: %s\n",debug_file.c_str());
-
-		log<<"Bibliography ";
-		log<<plumed.cite("Gao, J. Chem. Phys. 128, 064105 (2008)");
-		log<<plumed.cite("Yang, Niu and Parrinello, J. Phys. Chem. Lett. 9, 6426 (2018)");
-		log<<"\n";
 	}
 	if(bias_output)
 	{
@@ -1378,7 +1405,10 @@ void ITS_Bias::update_gaussian_grid()
 {
 	double eff_min=gauss_mean.front()-gauss_limit*gauss_sd.front();
 	double eff_max=gauss_mean.back()+gauss_limit*gauss_sd.back();
-	int_dE=(eff_max-eff_min)/int_num;
+	
+	int_dE=(eff_max-eff_min)/dE_num;
+	kl_rate=anneal_rate/int_dE;
+	
 	for(unsigned i=0;i!=energy_range.size();++i)
 		energy_range[i]=eff_min+int_dE*i;
 	for(unsigned i=0;i!=nreplica;++i)
@@ -1440,16 +1470,13 @@ inline bool ITS_Bias::kl_divergence(const std::vector<double>& p0,const std::vec
 	double kl1=0;
 	for(unsigned i=0;i!=energy_range.size();++i)
 	{
-		kl0+=p0[i]*std::log(p1[i]/p0[i]);
-		kl1+=p1[i]*std::log(p0[i]/p1[i]);
+		kl0+=-p0[i]*std::log(p1[i]/p0[i]);
+		kl1+=-p1[i]*std::log(p0[i]/p1[i]);
+		if(kl0>kl_rate&&kl1>kl_rate)
+			return true;
 	}
-	kl0*=int_dE;
-	kl1*=int_dE;
 	
-	if(kl0<anneal_rate&&kl1<anneal_rate)
-		return false;
-	else
-		return true;
+	return false;
 }
 
 void ITS_Bias::annealing_fb()
@@ -1457,8 +1484,12 @@ void ITS_Bias::annealing_fb()
 	std::vector<double> old_ratios(fb_ratios);
 	
 	double new_energy=0;
+	do_anneal=false;
 	while(anneal_judge(new_energy))
+	{
+		do_anneal=true;
 		new_energy+=(temp_ratio_energy-new_energy)/2;
+	}
 	
 	temp_ratio_energy=new_energy;
 	for(unsigned i=0;i!=nreplica;++i)

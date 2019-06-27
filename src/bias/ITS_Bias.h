@@ -150,6 +150,7 @@ private:
 	double d_pot;
 	double temp_ratio_energy;
 	double anneal_rate;
+	double kl_rate;
 	double int_dE;
 	//~ double neighbor_ratio;
 
@@ -200,6 +201,7 @@ private:
 	unsigned potdis_update;
 	unsigned nbiases;
 	unsigned int_num;
+	unsigned dE_num;
 	unsigned pegauss_update;
 
 	std::string fb_file;
