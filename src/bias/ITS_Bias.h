@@ -206,10 +206,6 @@ private:
 
 	std::string fb_file;
 	std::string fb_trj;
-	std::string norm_trj;
-	std::string iter_trj;
-	std::string deriv_trj;
-	std::string peshift_trj;
 	std::string fb_input;
 	std::string target_file;
 	std::string bias_file;

@@ -181,7 +181,7 @@ void ITS_Bias::registerKeywords(Keywords& keys)
 	keys.add("optional","RCT_FILE","the file to output the c(t)");
 	keys.add("optional","RCT_STRIDE","the frequency to output the c(t)");
 	keys.add("optional","ANNEAL_STRIDE","the frequncy (how many update cycles) to anneal");
-	keys.add("optional","EMA_DAYS","( default=200 ) the periods for smoothing factor of the exponential moving average to iteration the fb value");
+	keys.add("optional","EMA_DAYS","( default=0 ) the periods for smoothing factor of the exponential moving average to iteration the fb value");
 	//~ keys.add("optional","PRE_ITERATION_CYCLE","( default=100 ) the periods for smoothing factor of the exponential moving average to iteration the fb value");
 
 	keys.add("optional","FB_FILE","( default=fb.data ) a file to record the new fb values when they are update");
@@ -250,7 +250,7 @@ ITS_Bias::~ITS_Bias()
 
 ITS_Bias::ITS_Bias(const ActionOptions& ao):
 	PLUMED_BIAS_INIT(ao),update_start(0),rct(0),step(0),norm_step(0),
-	mcycle(0),iter_limit(0),ema_days(200),
+	mcycle(0),iter_limit(0),ema_days(0),
 	fb_init(0.0),fb_bias(0.0),rb_fac1(0.5),rb_fac2(0.0),temp_ratio_energy(0),
 	is_const(false),rw_output(false),read_norm(false),only_1st(false),
 	bias_output(false),rbfb_output(false),zke_output(false),
@@ -558,13 +558,6 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		rct_output=true;
 	rct_stride=fb_stride;
 	parse("RCT_STRIDE",rct_stride);
-
-	//~ parse("NORM_TRAJ",norm_trj);
-	//~ parse("ITER_TRAJ",iter_trj);
-	
-	//~ parse("PESHIFT_TRAJ",peshift_trj);
-	//~ if(peshift_trj.size()>0)
-		//~ peshift_output=true;
 	
 	// s(k)=exp(\beta_k*E_shift)/exp(\beta_{k+1}*E_shift)
 	// s(k)=exp[(\beta_k-\beta_{k+1})*E_shift]
@@ -595,12 +588,6 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 
 		if(fbtrj_output)
 			setupOFile(fb_trj,ofbtrj,use_mw);
-
-		//~ if(norm_output)
-			//~ setupOFile(norm_trj,onormtrj,use_mw);
-		
-		//~ if(peshift_output)
-			//~ setupOFile(peshift_trj,opstrj,use_mw);
 	}
 	
 	parse("BIAS_FILE",bias_file);
@@ -890,10 +877,6 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 			log.printf("    writing FB trajectory to file: %s\n",fb_trj.c_str());
 			if(rbfb_output)
 				log.printf("    writing RBFB trajectory to file: %s\n",rbfb_file.c_str());
-			log.printf("    writing normalized factors trajectory to file: %s\n",
-				norm_trj.c_str());
-			log.printf("    writing potential energy shift trajectory to file: %s\n",
-				peshift_trj.c_str());
 			log.printf("\n");
 		}
 		if(rw_output)
@@ -905,7 +888,7 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 		
 		if(do_calc_pegauss)
 		{
-			log.printf("  Estimating the distribution of potential energy as Gaussian distribuition");
+			log.printf("  Estimating the distribution of potential energy as Gaussian distribuition\n");
 			log.printf("    with updating for each %d cycles\n",int(pegauss_update));
 			log.printf("    with the range of integration as %f times of standard deviation\n",gauss_limit);
 			log.printf("    with integration bins: %d\n",int(int_num));
@@ -913,7 +896,7 @@ ITS_Bias::ITS_Bias(const ActionOptions& ao):
 				log.printf("    with distribution output to file: %s\n",pegauss_file.c_str());
 			if(do_anneal&&!is_const)
 			{
-				log.printf("  Using annealing with rate $f\n",anneal_rate);
+				log.printf("  Using annealing with rate %f\n",anneal_rate);
 			}
 		}
 		
@@ -1394,7 +1377,7 @@ void ITS_Bias::calc_pe_vag()
 		
 		double mean=exp(peavg[i]);
 		double mean2=exp(peavg2[i]);
-		gauss_mean[i]=mean-avg_shift;
+		gauss_mean[i]=mean-avg_shift-peshift;
 		gauss_sd2[i]=mean2-mean*mean;
 		gauss_sd[i]=sqrt(gauss_sd2[i]);
 		gauss_weight0[i]=exp(fb_ratios[i])/(gauss_sd[i]*std::log(2.0*pi));
@@ -1624,7 +1607,7 @@ void ITS_Bias::fb_iteration()
 			// ratio_new=log[{m'}_k(t)]=log[m_k(t-1)*P_{k+1}/P_{k}//R_k], if P_{k+1}/P_{k}=R_k, m_k(t)=m_k(t-1)
 			double ratio_new=ratio_old+rbfb[i+1]-rbfb[i]-rbfb_ratios[i];
 			
-			if(mcycle>=ema_days)
+			if(use_ema&&mcycle>=ema_days)
 				norml[i]+=wemay;
 
 			// normal=log[W_k(t)], normalold=log[W_k(t-1)]
@@ -1820,28 +1803,22 @@ void ITS_Bias::output_fb()
 		ofb.printf("#!-----END-OF-FB-COEFFICIENTS-----\n\n");
 		ofb.flush();
 	}
-	if(mcycle%fbtrj_stride==0)
+	if(fbtrj_output&&mcycle%fbtrj_stride==0)
 	{
-		if(fbtrj_output)
-		{
-			ofbtrj.fmtField(" %f");
-			ofbtrj.printField("step",int(mcycle));
-		}
-		if(fbtrj_output)
-		{
-			for(unsigned i=0;i!=nreplica;++i)
-			{
-				std::string id;
-				Tools::convert(i,id);
-				std::string fbid="FB"+id;
-				
-				if(fbtrj_output)
-					ofbtrj.printField(fbid,fb[i]);
+		ofbtrj.fmtField(" %f");
+		ofbtrj.printField("step",int(mcycle));
 
-			}
-			ofbtrj.printField();
-			ofbtrj.flush();
+		for(unsigned i=0;i!=nreplica;++i)
+		{
+			std::string id;
+			Tools::convert(i,id);
+			std::string fbid="FB"+id;
+			
+			if(fbtrj_output)
+				ofbtrj.printField(fbid,fb[i]);
 		}
+		ofbtrj.printField();
+		ofbtrj.flush();
 	}
 	if(rct_output&&mcycle%rct_stride==0)
 	{
