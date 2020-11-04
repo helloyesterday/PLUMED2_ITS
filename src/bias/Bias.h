@@ -75,7 +75,7 @@ public:
   double getBias() const {return valueBias->get();}
   bool isSetRct() const {return is_set_rct;}
   double getRct() const {return valueRct->get();}
-  void setExtraBiasRatio(double extra_bias_ratio_in) {extra_bias_ratio_=extra_bias_ratio_in;}
+  void setExtraBiasRatio(double extra_bias_ratio_in) {extra_bias_ratio_+=extra_bias_ratio_in;}
 ///
 };
 
