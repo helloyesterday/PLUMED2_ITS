@@ -1,5 +1,5 @@
 /* +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-   Copyright (c) 2011-2020 The plumed team
+   Copyright (c) 2011-2019 The plumed team
    (see the PEOPLE file at the root of the distribution for a list of names)
 
    See http://www.plumed.org for more information.
@@ -56,7 +56,7 @@ class Bias :
   Bias* ex_bias_pntr_;
 /// the ratio of the extra bias
   double extra_bias_ratio_;
-//
+///
 protected:
 /// set the force from the bias on argument i, this automatically set the partial derivative of the bias with respect to i to -f
   void setOutputForce(int i,double f);
@@ -69,8 +69,8 @@ protected:
 public:
   static void registerKeywords(Keywords&);
   explicit Bias(const ActionOptions&ao);
-  void apply() override;
-  unsigned getNumberOfDerivatives() override;
+  void apply();
+  unsigned getNumberOfDerivatives();
 // linked to another bias by Yi Isaac Yang
   void linkExternalBias(Bias*);
   bool ExternalBiasLinked() const {return ex_bias_linked_;}

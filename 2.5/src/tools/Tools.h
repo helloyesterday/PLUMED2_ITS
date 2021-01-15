@@ -1,5 +1,5 @@
 /* +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-   Copyright (c) 2011-2020 The plumed team
+   Copyright (c) 2011-2019 The plumed team
    (see the PEOPLE file at the root of the distribution for a list of names)
 
    See http://www.plumed.org for more information.
@@ -25,7 +25,6 @@
 #include "AtomNumber.h"
 #include <vector>
 #include <string>
-#include <cctype>
 #include <cstdio>
 #include <cmath>
 #include <limits>
@@ -72,8 +71,6 @@ public:
 /// This function already takes care of joining continued lines and splitting the
 /// resulting line into an array of words
   static bool getParsedLine(IFile&ifile,std::vector<std::string> & line);
-/// compare two string in a case insensitive manner
-  static bool caseInSensStringCompare(const std::string & str1, const std::string &str2);
 /// Convert a string to a double, reading it
   static bool convert(const std::string & str,double & t);
 /// Convert a string to a long double, reading it
@@ -299,19 +296,51 @@ std::vector<const T*> Tools::unique2raw(const std::vector<std::unique_ptr<const 
 inline double exp_add(double exp1,double exp2)
 {
 	if(exp1>exp2)
-		return exp1+std::log1p(std::exp(exp2-exp1));
+		return exp1+std::log(1.0+exp(exp2-exp1));
 	else
-		return exp2+std::log1p(std::exp(exp1-exp2));
+		return exp2+std::log(1.0+exp(exp1-exp2));
 }
 
 inline void exp_added(double& expsum,double expvalue)
 {
 	if(expsum>expvalue)
-		expsum=expsum+std::log1p(std::exp(expvalue-expsum));
+		expsum=expsum+std::log(1.0+exp(expvalue-expsum));
 	else
-		expsum=expvalue+std::log1p(std::exp(expsum-expvalue));
+		expsum=expvalue+std::log(1.0+exp(expsum-expvalue));
 }
-//
+
+inline double exp_minus(double exp1,double exp2)
+{
+	plumed_massert(exp1>exp2,"exp1 must be larger than exp2 when doing exp_minus");
+	return exp1+std::log(1.0-exp(exp2-exp1));
+}
+
+inline double exp_minus(double exp1,double exp2,bool& sign)
+{
+	if(exp1>exp2)
+	{
+		sign=false;
+		return exp1+std::log(1.0-exp(exp2-exp1));
+	}
+	else
+	{
+		sign=true;
+		return exp2+std::log(1.0-exp(exp1-exp2));
+	}
+}
+
+inline double exp_calc(double exp1,double exp2,bool sign1,bool sign2,bool& sign_fin)
+{
+	if(sign1==sign2)
+	{
+		sign_fin=sign1;
+		return exp_add(exp1,exp2);
+	}
+	else if(sign1)
+		return exp_minus(exp2,exp1,sign_fin);
+	else
+		return exp_minus(exp1,exp2,sign_fin);
+}
 
 }
 
